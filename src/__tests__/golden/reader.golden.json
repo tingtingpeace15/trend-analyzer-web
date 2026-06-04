@@ -1,0 +1,77 @@
+{
+  "_comment": "由 scripts/gen_golden_reader.py 生成,勿手改。对照 pipeline.py 读取阶段。",
+  "zhixiao": {
+    "file": "滞销商品【按销售】_njfayxbugwDqARB.xlsx",
+    "rows": 825,
+    "cols": 12,
+    "columns": [
+      "货号",
+      "销进率",
+      "可售库存",
+      "库存价值",
+      "上市天数",
+      "未成交天数:",
+      "是否盈利",
+      "盈利金额",
+      "品类",
+      "设计师品牌",
+      "年份",
+      "品牌"
+    ],
+    "first5货号": [
+      "FA20017小衫",
+      "HJ7293-1吊带",
+      "FA90822-1半裙",
+      "HA7323短袖T",
+      "KA50362小衫"
+    ]
+  },
+  "sales": {
+    "file": "各商品客户拿货历史_5.12.xlsx",
+    "sheetNames": [
+      "各商品客户拿货历史",
+      "Sheet1"
+    ],
+    "sheetMeta": [
+      {
+        "name": "各商品客户拿货历史",
+        "headerRow": 1,
+        "cols": 15,
+        "rows": 99800,
+        "kept": true
+      },
+      {
+        "name": "Sheet1",
+        "headerRow": null,
+        "cols": 15,
+        "rows": 95124,
+        "kept": true
+      }
+    ],
+    "rawRows": 194924,
+    "cols": 15,
+    "columns": [
+      "店铺",
+      "货号",
+      "分类",
+      "年份",
+      "设计师品牌",
+      "品牌",
+      "颜色:",
+      "尺码:",
+      "销退单ID",
+      "下单时间",
+      "客户名称",
+      "销售",
+      "净销售量",
+      "销售量",
+      "净销售金额"
+    ],
+    "cleanRows": 194924,
+    "minDate": "2026-01-01",
+    "maxDate": "2026-04-15",
+    "totalQty": 268469.0,
+    "totalAmt": 21644385.82,
+    "uniqueItems": 6766
+  }
+}
