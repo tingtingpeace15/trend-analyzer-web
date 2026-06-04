@@ -13,7 +13,7 @@
 - [x] **M5** ExcelJS 写 3 个 sheet + 嵌图(2026-06-04;排序/单元格/样式/锚点对照 9 项全过,合计 33 项;端到端可下载)
 - [x] **M6** 进度日志 + 性能优化 + 错误处理(2026-06-04;Run 页复刻旧版,PNG 8 路并行,结构化错误)
 - [x] **M7** 全字段 diff Python 版输出(2026-06-04;**逐 sheet/单元格/样式/锚点全部一致**)
-- [ ] **M8** GitHub Pages 部署
+- [x] **M8** GitHub Pages 部署(2026-06-04;https://tingtingpeace15.github.io/trend-analyzer-web/ ,推 main 自动部署)
 
 ## 结构
 
