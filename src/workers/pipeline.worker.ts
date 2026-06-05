@@ -8,7 +8,7 @@ import { buildPreferenceHtml } from '../pipeline/preferenceHtml';
 import { buildPreferenceExcel } from '../pipeline/preferenceExcel';
 import { aggregate } from '../pipeline/aggregator';
 import { buildDetailScene, buildSmallScene, sceneToPng } from '../pipeline/chart';
-import { writeExcel } from '../pipeline/writer';
+import { splitPinnedFields, writeExcel } from '../pipeline/writer';
 import { PipelineError } from '../pipeline/errors';
 import type {
   LogKind,
@@ -102,6 +102,13 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
     if (agg.extraFields.length > 0) {
       const pyList = `[${agg.extraFields.map((f) => `'${f}'`).join(', ')}]`;
       log(`  滞销表透传 ${agg.extraFields.length} 个额外字段: ${pyList}`, 'milestone', 2);
+      // 钉位判定结果直接进日志:排查"配置了不生效"时一眼定位是表头问题还是代码问题
+      const { pinnedAfterQty } = splitPinnedFields(agg.extraFields);
+      if (pinnedAfterQty.length > 0) {
+        log(`  钉位字段(置于销售量之后): [${pinnedAfterQty.map((f) => `'${f}'`).join(', ')}]`, 'milestone', 2);
+      } else {
+        log('  钉位字段: 未命中(透传里没有 A价,全部按默认位置排)', 'normal', 2);
+      }
     }
     log(`  总货号数（来自滞销商品）: ${agg.itemsTotal}`, 'milestone', 2);
     log(`    有销量款: ${agg.itemsWithSales}`, 'normal', 2);

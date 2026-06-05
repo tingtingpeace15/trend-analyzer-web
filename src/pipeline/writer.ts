@@ -33,12 +33,15 @@ const HEAD_TAIL = ['销售量', '总销售金额', '盈利金额'];
  */
 const PINNED_AFTER_QTY = ['A价'];
 
-/** 钉位匹配用的列名规范化:只做两个理性容错——去首尾空白、去尾部冒号
- *  (滞销表表头有 "未成交天数:" 这种冒号习惯)。曾因客户源数据出现过
- *  "À价"(A 带重音)加过 NFKD 去音符,2026-06-05 源数据修正后按用户要求撤掉,
- *  恢复正常字符精确辨别。输出列头保留原始写法(透传原则)。 */
+/** 钉位匹配用的列名规范化:去首尾空白、去尾部冒号("未成交天数:" 习惯)、
+ *  NFKD 分解去变音符 + 全角转半角 + 统一大写。客户源数据先后出现过
+ *  "À价"(带重音)等隐形变体;宽容匹配是严格匹配的超集,正常 A价 照样命中。
+ *  输出列头保留原始写法(透传原则)。 */
 function normFieldName(s: string): string {
-  return s.trim().replace(/[:：]+$/, '');
+  return s.trim().replace(/[:：]+$/, '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
 }
 const HEAD_KNOWN_WIDTHS = [18, 14, 12, 10, 10, 10, 12, 10, 12, 10];
 const DETAIL_KNOWN_WIDTHS = [16, 14, 12, 10, 10, 10, 12, 10, 12, 10];
@@ -165,6 +168,15 @@ function addAnchoredImage(ws: ExcelJS.Worksheet, imageId: number, col1: number, 
   } as unknown as Parameters<ExcelJS.Worksheet['addImage']>[1]);
 }
 
+/** 透传字段拆分:钉位组(销售量后)+ 默认组。worker 用它打判定日志 */
+export function splitPinnedFields(extraFields: string[]): { pinnedAfterQty: string[]; extraRest: string[] } {
+  const pinnedNorm = new Set(PINNED_AFTER_QTY.map(normFieldName));
+  return {
+    pinnedAfterQty: extraFields.filter((f) => pinnedNorm.has(normFieldName(f))),
+    extraRest: extraFields.filter((f) => !pinnedNorm.has(normFieldName(f))),
+  };
+}
+
 // ── 主入口 ────────────────────────────────────────────────────────────────
 
 export async function writeExcel(
@@ -204,9 +216,7 @@ export async function writeExcel(
   };
 
   // 透传字段分两组:固定排位组(销售量之后)+ 默认组(可售库存之后)
-  const pinnedNorm = new Set(PINNED_AFTER_QTY.map(normFieldName));
-  const pinnedAfterQty = extraFields.filter((f) => pinnedNorm.has(normFieldName(f)));
-  const extraRest = extraFields.filter((f) => !pinnedNorm.has(normFieldName(f)));
+  const { pinnedAfterQty, extraRest } = splitPinnedFields(extraFields);
   const headers = [
     ...HEAD_KNOWN, ...extraRest,
     HEAD_TAIL[0], ...pinnedAfterQty, HEAD_TAIL[1], HEAD_TAIL[2],
