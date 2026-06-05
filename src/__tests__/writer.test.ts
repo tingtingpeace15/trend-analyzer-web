@@ -148,12 +148,12 @@ describe('writeExcel(3 个 sheet)', () => {
   it('A价 固定排位:出现时插在销售量之后(2026-06-05 需求)', async () => {
     // 在真实滞销表上注入合成 A价 列 → 透传应分组:是否盈利留默认区,A价 钉在销售量后
     const zhixiao = readZhixiao(new Uint8Array(readFileSync(resolve(BASE_DIR, readerGolden.zhixiao.file))));
-    // 正常 A价(源数据已修正;尾冒号容错由 normFieldName 覆盖)
-    zhixiao.columns.push('A价');
-    zhixiao.rows.forEach((r, i) => { r.cells['A价'] = 100 + i; });
+    // 用隐形变体「À价」注入:验证宽容匹配 + 输出列头规范化为 A价
+    zhixiao.columns.push('À价');
+    zhixiao.rows.forEach((r, i) => { r.cells['À价'] = 100 + i; });
     const sales = readSales(new Uint8Array(readFileSync(resolve(BASE_DIR, readerGolden.sales.file))));
     const agg2 = aggregate(zhixiao, sales);
-    expect(agg2.extraFields).toEqual(['是否盈利', 'A价']);
+    expect(agg2.extraFields).toEqual(['是否盈利', 'À价']);
     // 只取前 20 款,加速写入
     agg2.items = agg2.items.slice(0, 20);
     const images = new Map<number, ItemImages>(

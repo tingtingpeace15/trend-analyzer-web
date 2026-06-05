@@ -168,6 +168,12 @@ function addAnchoredImage(ws: ExcelJS.Worksheet, imageId: number, col1: number, 
   } as unknown as Parameters<ExcelJS.Worksheet['addImage']>[1]);
 }
 
+/** 钉位字段的输出列头统一用规范名(如 A价):源文件出现过 À价/Ａ价 等隐形变体,
+ *  引擎宽容匹配认字段,但输出列头展示规范写法。数据读取仍用原始名(透传键)。 */
+function canonicalPinnedName(raw: string): string {
+  return PINNED_AFTER_QTY.find((p) => normFieldName(p) === normFieldName(raw)) ?? raw;
+}
+
 /** 透传字段拆分:钉位组(销售量后)+ 默认组。worker 用它打判定日志 */
 export function splitPinnedFields(extraFields: string[]): { pinnedAfterQty: string[]; extraRest: string[] } {
   const pinnedNorm = new Set(PINNED_AFTER_QTY.map(normFieldName));
@@ -217,9 +223,10 @@ export async function writeExcel(
 
   // 透传字段分两组:固定排位组(销售量之后)+ 默认组(可售库存之后)
   const { pinnedAfterQty, extraRest } = splitPinnedFields(extraFields);
+  const pinnedDisplay = pinnedAfterQty.map(canonicalPinnedName);
   const headers = [
     ...HEAD_KNOWN, ...extraRest,
-    HEAD_TAIL[0], ...pinnedAfterQty, HEAD_TAIL[1], HEAD_TAIL[2],
+    HEAD_TAIL[0], ...pinnedDisplay, HEAD_TAIL[1], HEAD_TAIL[2],
     '商品销售量趋势图',
   ];
   const SALES_QTY_COL = 11 + extraRest.length;
@@ -333,7 +340,7 @@ export async function writeExcel(
 
   // ---------- Sheet 3:款日销量明细 ----------
   const ws3 = wb.addWorksheet('款日销量明细');
-  const metaHeaders3 = [...HEAD_KNOWN, ...extraRest, HEAD_TAIL[0], ...pinnedAfterQty, HEAD_TAIL[1], HEAD_TAIL[2]];
+  const metaHeaders3 = [...HEAD_KNOWN, ...extraRest, HEAD_TAIL[0], ...pinnedDisplay, HEAD_TAIL[1], HEAD_TAIL[2]];
   const widths3 = [...META3_KNOWN_WIDTHS, ...Array(extraRest.length).fill(EXTRA_WIDTH), ...tailWidths];
   metaHeaders3.forEach((h, j0) => {
     ws3.getCell(1, j0 + 1).value = h;
