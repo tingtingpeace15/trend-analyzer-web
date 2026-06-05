@@ -1,11 +1,11 @@
 // App.tsx — 顶层路由:upload → run → result。布局壳复刻旧版 App.jsx。
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Upload from './components/Upload';
 import Run from './components/Run';
 import Result from './components/Result';
 import PreferenceResult from './components/PreferenceResult';
 import { IconLogo } from './components/icons';
-import { startJob } from './api';
+import { prewarmWorker, startJob } from './api';
 import type { JobDone, JobError, JobHandle, JobInputFile, PreviewImage } from './api';
 import type { AnalysisMode, LogMessage } from './types/pipeline';
 
@@ -20,9 +20,16 @@ export default function App() {
   const [error, setError] = useState<JobError | null>(null);
   const jobRef = useRef<JobHandle | null>(null);
 
+  // 页面加载后空闲预热 Worker(1.3MB bundle 提前下载+编译,消掉点开始后的长空白)
+  useEffect(() => {
+    const t = setTimeout(prewarmWorker, 300);
+    return () => clearTimeout(t);
+  }, []);
+
   const handleStart = (jobMode: AnalysisMode, inputs: JobInputFile[]) => {
     setMode(jobMode);
-    setLogs([]);
+    // 即时反馈:Worker 首条日志到来前,终端不留白
+    setLogs([{ type: 'log', text: '正在初始化分析引擎…', kind: 'normal', step: 1, t: 0 }]);
     setPreviews([]);
     setResult(null);
     setError(null);

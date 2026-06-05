@@ -40,15 +40,30 @@ export interface JobHandle {
   cancel: () => void;
 }
 
+function createWorker(): Worker {
+  return new Worker(
+    new URL('./workers/pipeline.worker.ts', import.meta.url),
+    { type: 'module' },
+  );
+}
+
+// Worker bundle 有 ~1.3MB(SheetJS+ExcelJS),按需创建时"下载+编译"会让
+// 用户点了开始后干等好几秒。池子里常备一个预热好的实例:页面加载即预热,
+// 任务正常结束后归还复用;cancel/error 才销毁。
+let pooled: Worker | null = null;
+
+/** 页面空闲时调用:提前下载+编译 Worker,点「开始分析」即刻可用 */
+export function prewarmWorker(): void {
+  if (!pooled) pooled = createWorker();
+}
+
 /**
  * 启动一次分析:读文件 → 以 transferable ArrayBuffer 传给 Worker → 把 Worker 消息转回调。
  * cancel() 直接 terminate Worker(没有后端任务要清理)。
  */
 export function startJob(mode: AnalysisMode, inputs: JobInputFile[], cb: JobCallbacks): JobHandle {
-  const worker = new Worker(
-    new URL('./workers/pipeline.worker.ts', import.meta.url),
-    { type: 'module' },
-  );
+  const worker = pooled ?? createWorker();
+  pooled = null;
   let alive = true;
 
   worker.onmessage = (e: MessageEvent<WorkerToMainMessage>) => {
@@ -62,6 +77,11 @@ export function startJob(mode: AnalysisMode, inputs: JobInputFile[], cb: JobCall
         cb.onPreview?.(msg.images);
         break;
       case 'done':
+        alive = false;
+        // 任务正常完成:Worker 归还池子复用(每次 run 自身会重置状态)
+        worker.onmessage = null;
+        worker.onerror = null;
+        if (!pooled) pooled = worker;
         cb.onDone(msg);
         break;
       case 'error':
