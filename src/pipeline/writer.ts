@@ -25,6 +25,13 @@ const GRAY = '00999999';
 const HEAD_KNOWN = ['货号', '品类', '品牌', '季节', '设计师',
   '上市天数', '未成交天数', '销进率', '库存价值', '可售库存'];
 const HEAD_TAIL = ['销售量', '总销售金额', '盈利金额'];
+
+/**
+ * 固定排位的透传字段:滞销表里出现时不进默认透传区(可售库存之后),
+ * 而是插在「销售量」之后。2026-06-05 用户要求(A价)。
+ * 注意:这是对 Python 版列序的有意偏离;若 Python 版同步改,diff 才会一致。
+ */
+const PINNED_AFTER_QTY = ['A价'];
 const HEAD_KNOWN_WIDTHS = [18, 14, 12, 10, 10, 10, 12, 10, 12, 10];
 const DETAIL_KNOWN_WIDTHS = [16, 14, 12, 10, 10, 10, 12, 10, 12, 10];
 const META3_KNOWN_WIDTHS = [14, 14, 12, 10, 10, 10, 12, 10, 12, 10];
@@ -188,10 +195,22 @@ export async function writeExcel(
     return id;
   };
 
-  const headers = [...HEAD_KNOWN, ...extraFields, ...HEAD_TAIL, '商品销售量趋势图'];
-  const SALES_QTY_COL = 11 + extraFields.length;
-  const SALES_AMT_COL = 12 + extraFields.length;
-  const PROFIT_COL = 13 + extraFields.length;
+  // 透传字段分两组:固定排位组(销售量之后)+ 默认组(可售库存之后)
+  const pinnedAfterQty = PINNED_AFTER_QTY.filter((f) => extraFields.includes(f));
+  const extraRest = extraFields.filter((f) => !pinnedAfterQty.includes(f));
+  const headers = [
+    ...HEAD_KNOWN, ...extraRest,
+    HEAD_TAIL[0], ...pinnedAfterQty, HEAD_TAIL[1], HEAD_TAIL[2],
+    '商品销售量趋势图',
+  ];
+  const SALES_QTY_COL = 11 + extraRest.length;
+  const SALES_AMT_COL = SALES_QTY_COL + 1 + pinnedAfterQty.length;
+  const PROFIT_COL = SALES_AMT_COL + 1;
+  /** 含固定排位透传列的尾段列宽:[销售量, ...pinned, 总销售金额, 盈利金额] */
+  const tailWidths = [
+    HEAD_TAIL_WIDTHS[0], ...Array(pinnedAfterQty.length).fill(EXTRA_WIDTH),
+    HEAD_TAIL_WIDTHS[1], HEAD_TAIL_WIDTHS[2],
+  ];
 
   /**
    * 元数据 13+extra 列的写入(三个 sheet 共用)。
@@ -219,11 +238,13 @@ export async function writeExcel(
     if (item.销进率 != null && item.销进率 === 0) rcell.font = { color: { argb: GRAY } };
     set(9, asNum(item.库存价值));
     set(10, asNum(item.可售库存));
-    extraFields.forEach((fname, ei) => {
+    const setExtra = (c: number, fname: string) => {
       const raw = item.extra[fname];
-      if (typeof raw === 'number') set(11 + ei, raw);
-      else set(11 + ei, asStr(raw, extraF64.get(fname)!));
-    });
+      if (typeof raw === 'number') set(c, raw);
+      else set(c, asStr(raw, extraF64.get(fname)!));
+    };
+    extraRest.forEach((fname, ei) => setExtra(11 + ei, fname));
+    pinnedAfterQty.forEach((fname, pi) => setExtra(SALES_QTY_COL + 1 + pi, fname));
     const qcell = set(SALES_QTY_COL, item.销售量);
     if (item.销售量 > 0) qcell.font = { color: { argb: RED }, bold: true };
     else if (qtyGrayWhenZero) qcell.font = { color: { argb: GRAY } };
@@ -278,14 +299,14 @@ export async function writeExcel(
   }
 
   // ---------- Sheet 1:商品销售趋势 ----------
-  const widths1 = [...HEAD_KNOWN_WIDTHS, ...Array(extraFields.length).fill(EXTRA_WIDTH), ...HEAD_TAIL_WIDTHS, 54];
+  const widths1 = [...HEAD_KNOWN_WIDTHS, ...Array(extraRest.length).fill(EXTRA_WIDTH), ...tailWidths, 54];
   const rows1 = writeChartSheet({
     name: '商品销售趋势', widths: widths1, imgKey: 'sm', rowH: 62,
   });
   log(`  写入 sheet「商品销售趋势」 ${rows1} 行 × ${headers.length} 列`, 'normal', 4);
 
   // ---------- Sheet 2:款趋势明细图 ----------
-  const widths2 = [...DETAIL_KNOWN_WIDTHS, ...Array(extraFields.length).fill(EXTRA_WIDTH), ...HEAD_TAIL_WIDTHS, 92];
+  const widths2 = [...DETAIL_KNOWN_WIDTHS, ...Array(extraRest.length).fill(EXTRA_WIDTH), ...tailWidths, 92];
   writeChartSheet({
     name: '款趋势明细图', widths: widths2, imgKey: 'dt', rowH: 148,
   });
@@ -293,8 +314,8 @@ export async function writeExcel(
 
   // ---------- Sheet 3:款日销量明细 ----------
   const ws3 = wb.addWorksheet('款日销量明细');
-  const metaHeaders3 = [...HEAD_KNOWN, ...extraFields, ...HEAD_TAIL];
-  const widths3 = [...META3_KNOWN_WIDTHS, ...Array(extraFields.length).fill(EXTRA_WIDTH), ...HEAD_TAIL_WIDTHS];
+  const metaHeaders3 = [...HEAD_KNOWN, ...extraRest, HEAD_TAIL[0], ...pinnedAfterQty, HEAD_TAIL[1], HEAD_TAIL[2]];
+  const widths3 = [...META3_KNOWN_WIDTHS, ...Array(extraRest.length).fill(EXTRA_WIDTH), ...tailWidths];
   metaHeaders3.forEach((h, j0) => {
     ws3.getCell(1, j0 + 1).value = h;
     ws3.getColumn(j0 + 1).width = widths3[j0];

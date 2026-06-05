@@ -145,6 +145,39 @@ describe('writeExcel(3 个 sheet)', () => {
     expect(textOf(noteZero)).toBe(`${agg.windowDays}日内无销售记录`);
   });
 
+  it('A价 固定排位:出现时插在销售量之后(2026-06-05 需求)', async () => {
+    // 在真实滞销表上注入合成 A价 列 → 透传应分组:是否盈利留默认区,A价 钉在销售量后
+    const zhixiao = readZhixiao(new Uint8Array(readFileSync(resolve(BASE_DIR, readerGolden.zhixiao.file))));
+    zhixiao.columns.push('A价');
+    zhixiao.rows.forEach((r, i) => { r.cells['A价'] = 100 + i; });
+    const sales = readSales(new Uint8Array(readFileSync(resolve(BASE_DIR, readerGolden.sales.file))));
+    const agg2 = aggregate(zhixiao, sales);
+    expect(agg2.extraFields).toEqual(['是否盈利', 'A价']);
+    // 只取前 20 款,加速写入
+    agg2.items = agg2.items.slice(0, 20);
+    const images = new Map<number, ItemImages>(
+      agg2.items.map((_, i) => [i, { sm: TINY_PNG, dt: TINY_PNG }]),
+    );
+    const wb2 = new ExcelJS.Workbook();
+    await wb2.xlsx.load((await writeExcel(agg2, images, () => {})).buffer as ArrayBuffer);
+
+    const ws = wb2.getWorksheet('商品销售趋势')!;
+    const hdr = Array.from({ length: 16 }, (_, j) => ws.getCell(1, j + 1).value);
+    expect(hdr).toEqual([
+      '货号', '品类', '品牌', '季节', '设计师', '上市天数', '未成交天数',
+      '销进率', '库存价值', '可售库存', '是否盈利',
+      '销售量', 'A价', '总销售金额', '盈利金额', '商品销售量趋势图',
+    ]);
+    expect(ws.getColumn(13).width).toBe(12); // A价 透传列宽
+    // 数值原样透传(排序后第一行对应原始某行的 100+i)
+    expect(typeof ws.getCell(2, 13).value).toBe('number');
+    // Sheet3 同样排位
+    const ws3 = wb2.getWorksheet('款日销量明细')!;
+    expect(ws3.getCell(1, 12).value).toBe('销售量');
+    expect(ws3.getCell(1, 13).value).toBe('A价');
+    expect(ws3.getCell(1, 14).value).toBe('总销售金额');
+  }, 120_000);
+
   it('Sheet3:日期列 + 合计列', () => {
     const ws3 = wb.getWorksheet('款日销量明细')!;
     const metaLen = golden.headers.length - 1; // 无趋势图列

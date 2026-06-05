@@ -71,6 +71,14 @@ python3 scripts/diff_xlsx.py             # 逐 sheet/单元格/样式/锚点 dif
 约定不比的两项:图片字节(Canvas vs matplotlib 光栅化必然不同,由 chart.test.ts
 的几何对照 + 浏览器目检保障)、批注外形尺寸(ExcelJS 不支持设置)。
 
+### 对 Python 版的有意偏离(diff 时注意)
+
+1. 偏好 html「客户等级分布」饼图扇区改用总金额(原版用客户数,四分位下永远近似
+   四等分)。补丁记录在 `scripts/extract_html_template.py` 的 PATCHES。
+2. 趋势分析:滞销表透传字段「A价」出现时固定排在「销售量」之后(原版按透传区
+   排在可售库存后)。见 `writer.ts` 的 `PINNED_AFTER_QTY`。
+   两条都建议同步改 Python 版,否则带 A价 的输入 diff 会报列序差异。
+
 ## 偏好分析的回归验证流程(M13)
 
 ```bash
