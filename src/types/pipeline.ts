@@ -1,12 +1,16 @@
 // 主线程 ↔ Web Worker 的消息协议。
 // M1 只有「收到文件确认」;M2+ 逐步扩成完整 pipeline 进度/结果。
 
-/** 文件角色,沿用旧版 mockApi.jsx 的命名 */
-export type FileRole = '滞销表' | '销售明细';
+/** 分析模式:商品趋势分析 / 客户偏好分析 */
+export type AnalysisMode = 'trend' | 'preference';
+
+/** 文件角色,沿用旧版 mockApi.jsx 的命名(拿货历史 = 偏好分析的唯一输入) */
+export type FileRole = '滞销表' | '销售明细' | '拿货历史';
 
 /** 主线程 → Worker:启动分析任务 */
 export interface RunJobMessage {
   type: 'run';
+  mode: AnalysisMode;
   files: WorkerFileInput[];
 }
 
@@ -38,7 +42,7 @@ export interface PreviewMessage {
   images: { label: string; png: ArrayBuffer }[];
 }
 
-/** 分析结果摘要(Result 页展示,对应 Python 版 run_pipeline 返回值) */
+/** 趋势分析结果摘要(对应 Python 版 pipeline.py run_pipeline 返回值) */
 export interface JobSummary {
   items: number;
   itemsWithSales: number;
@@ -48,13 +52,24 @@ export interface JobSummary {
   sizeBytes: number;
 }
 
-/** Worker → 主线程:任务完成,携带结果 xlsx 字节 */
-export interface DoneMessage {
-  type: 'done';
+/** 偏好分析结果摘要(对应 preference_pipeline.py run_pipeline 返回值) */
+export interface PreferenceSummary {
+  records: number;
+  customers: number;
+  amount: number;
+  dateFrom: string;
+  dateTo: string;
+}
+
+export interface FilePayload {
   filename: string;
   buffer: ArrayBuffer;
-  summary: JobSummary;
 }
+
+/** Worker → 主线程:任务完成。趋势 = 1 个 xlsx;偏好 = html 报告 + xlsx 数据表 */
+export type DoneMessage =
+  | { type: 'done'; mode: 'trend'; filename: string; buffer: ArrayBuffer; summary: JobSummary }
+  | { type: 'done'; mode: 'preference'; html: FilePayload; xlsx: FilePayload; summary: PreferenceSummary };
 
 /** 对应 main.py 的 job.error = {message, hint, step} */
 export interface ErrorMessage {

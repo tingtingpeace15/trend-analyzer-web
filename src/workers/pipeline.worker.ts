@@ -2,6 +2,10 @@
 // 日志文案/格式/步骤号/时间戳对齐 Python 版(backend/main.py 的 SSE + pipeline.py 的 log),
 // 方便 A/B 对照。流程:读 Excel → 聚合 → Canvas 画图(并行编码)→ ExcelJS 组装。
 import { readSales, readZhixiao } from '../pipeline/reader';
+import { loadPreference } from '../pipeline/preferenceReader';
+import { analyzePreference, TOP_N } from '../pipeline/preferenceAnalyze';
+import { buildPreferenceHtml } from '../pipeline/preferenceHtml';
+import { buildPreferenceExcel } from '../pipeline/preferenceExcel';
 import { aggregate } from '../pipeline/aggregator';
 import { buildDetailScene, buildSmallScene, sceneToPng } from '../pipeline/chart';
 import { writeExcel } from '../pipeline/writer';
@@ -52,6 +56,10 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
   curStep = 1;
 
   try {
+    if (msg.mode === 'preference') {
+      await runPreference(msg.files);
+      return;
+    }
     const zhixiaoFile = msg.files.find((f) => f.role === '滞销表');
     const salesFile = msg.files.find((f) => f.role === '销售明细');
     if (!zhixiaoFile || !salesFile) {
@@ -168,6 +176,7 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
     post(
       {
         type: 'done',
+        mode: 'trend',
         filename: '商品销售趋势.xlsx',
         buffer: outBuffer,
         summary: {
@@ -190,3 +199,66 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
     post({ type: 'error', message, hint, step: curStep });
   }
 };
+
+// ── 客户偏好分析(对应 backend/preference_pipeline.py)────────────────────
+// M9 是 stub:验证 tab/Worker/Result 全链路。M10 接 reader,M11 聚合,M12 出 html+xlsx。
+async function runPreference(files: { role: string; name: string; buffer: ArrayBuffer }[]) {
+  const input = files.find((f) => f.role === '拿货历史');
+  if (!input) {
+    throw new PipelineError('缺少输入文件:需要一份「各商品客户拿货历史」');
+  }
+
+  banner('客户偏好分析', 1);
+  log(`  输入：${input.name}`, 'normal', 1);
+  const data = loadPreference(input.buffer);
+  // 日志格式对齐 preference_pipeline.py:111
+  log(`  读到 ${fmtN(data.rawRowCount)} 条原始记录（${data.sheetNames.length} 个 sheet）`, 'normal', 1);
+  if (data.droppedConflicts.length > 0) {
+    log(`  丢弃毛值冲突列: ${data.droppedConflicts.join(', ')}（取净值）`, 'normal', 1);
+  }
+  log(`  规范化后 ${data.columns.length} 列: ${data.columns.join(' / ')}`, 'normal', 1);
+  banner('聚合与画像', 2);
+  const R = analyzePreference(data);
+  const sm = R.summary as Record<string, number | string>;
+  // 日志格式对齐 preference_pipeline.py:222-227
+  log(
+    `  有效交易 ${fmtN(sm.records as number)} 条 | ` +
+    `客户 ${fmtN(sm.customers as number)} 位 | ` +
+    `销售额 ¥${((sm.amount as number) / 10000).toFixed(0)}万`,
+    'milestone', 2,
+  );
+  // ---------- 步骤 3:生成网页报告 ----------
+  banner('生成网页报告', 3);
+  const htmlBytes = new TextEncoder().encode(buildPreferenceHtml(R)).buffer as ArrayBuffer;
+  log(`  ✓ 网页报告已生成（${(htmlBytes.byteLength / 1024).toFixed(0)} KB）`, 'done', 3);
+
+  // ---------- 步骤 4:生成 Excel 数据表 ----------
+  banner('生成 Excel 数据表', 4);
+  const xlsxU8 = await buildPreferenceExcel(data);
+  const kb = xlsxU8.byteLength / 1024;
+  const sizeStr = kb < 1024 ? `${kb.toFixed(0)} KB` : `${(kb / 1024).toFixed(1)} MB`;
+  log(`  ✓ Excel 已生成（${sizeStr}，含约 20 个 sheet）`, 'done', 4);
+
+  banner('完成', 5);
+  log(`  全部 ${fmtN(sm.customers as number)} 位客户的画像可在 Excel「9-客户画像汇总」查看`, 'milestone', 5);
+  log(`  网页可视化仍只展示前 ${TOP_N} 大客户（聚焦决策）`, 'normal', 5);
+  log('✅ 完成', 'done', 5);
+
+  const xlsxBuf = xlsxU8.buffer as ArrayBuffer;
+  post(
+    {
+      type: 'done',
+      mode: 'preference',
+      html: { filename: '客户偏好分析报告.html', buffer: htmlBytes },
+      xlsx: { filename: '客户偏好分析数据.xlsx', buffer: xlsxBuf },
+      summary: {
+        records: sm.records as number,
+        customers: sm.customers as number,
+        amount: sm.amount as number,
+        dateFrom: sm.date_from as string,
+        dateTo: sm.date_to as string,
+      },
+    },
+    [htmlBytes, xlsxBuf],
+  );
+}

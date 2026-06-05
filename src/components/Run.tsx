@@ -2,18 +2,29 @@
 // 数据来源从 SSE 换成了 Worker 消息,UI 结构/配色/动画原样保留。
 import { Fragment, useEffect, useMemo, useRef } from 'react';
 import { IconAlert, IconRefresh } from './icons';
-import type { LogMessage } from '../types/pipeline';
+import type { AnalysisMode, LogMessage } from '../types/pipeline';
 import type { JobError, PreviewImage } from '../api';
 
-const STEPS = [
-  { n: 1, label: '识别文件' },
-  { n: 2, label: '聚合销售' },
-  { n: 3, label: '生成趋势图' },
-  { n: 4, label: '组装 Excel' },
-  { n: 5, label: '完成' },
-];
+// 两套 step 标签互不影响(同旧版 Run.jsx 的 STEPS_TREND / STEPS_PREFERENCE)
+const STEPS_BY_MODE: Record<AnalysisMode, { n: number; label: string }[]> = {
+  trend: [
+    { n: 1, label: '识别文件' },
+    { n: 2, label: '聚合销售' },
+    { n: 3, label: '生成趋势图' },
+    { n: 4, label: '组装 Excel' },
+    { n: 5, label: '完成' },
+  ],
+  preference: [
+    { n: 1, label: '加载数据' },
+    { n: 2, label: '聚合分析' },
+    { n: 3, label: '生成网页' },
+    { n: 4, label: '生成 Excel' },
+    { n: 5, label: '完成' },
+  ],
+};
 
-function StepProgress({ current, errored, errorStep, subProgress }: {
+function StepProgress({ steps, current, errored, errorStep, subProgress }: {
+  steps: { n: number; label: string }[];
   current: number;
   errored: boolean;
   errorStep: number;
@@ -22,7 +33,7 @@ function StepProgress({ current, errored, errorStep, subProgress }: {
   return (
     <div className="w-full">
       <div className="flex items-start gap-0">
-        {STEPS.map((s, idx) => {
+        {steps.map((s, idx) => {
           const isDone = s.n < current && !(errored && s.n === errorStep);
           const isCur = current === s.n && !errored;
           const isErr = errored && s.n === errorStep;
@@ -56,7 +67,7 @@ function StepProgress({ current, errored, errorStep, subProgress }: {
                   {s.n === 3 && isCur && subProgress ? subProgress : ''}
                 </div>
               </div>
-              {idx < STEPS.length - 1 && (
+              {idx < steps.length - 1 && (
                 <div className="flex-1 h-px mt-3 relative min-w-[24px]">
                   <div className="absolute inset-0 bg-line" />
                   <div
@@ -121,7 +132,8 @@ function ErrorCard({ error, onRetry }: { error: JobError; onRetry: () => void })
   );
 }
 
-export default function Run({ logs, previews, error, onBack }: {
+export default function Run({ mode, logs, previews, error, onBack }: {
+  mode: AnalysisMode;
   logs: LogMessage[];
   previews: PreviewImage[];
   error: JobError | null;
@@ -160,6 +172,7 @@ export default function Run({ logs, previews, error, onBack }: {
       {/* step indicator */}
       <div className="bg-white border border-line rounded-card px-6 py-5 overflow-x-auto">
         <StepProgress
+          steps={STEPS_BY_MODE[mode]}
           current={finished ? 5 : current}
           errored={!!error}
           errorStep={error?.step ?? 1}

@@ -15,6 +15,14 @@
 - [x] **M7** 全字段 diff Python 版输出(2026-06-04;**逐 sheet/单元格/样式/锚点全部一致**)
 - [x] **M8** GitHub Pages 部署(2026-06-04;https://tingtingpeace15.github.io/trend-analyzer-web/ ,推 main 自动部署)
 
+### 第二条业务线:客户偏好分析(对照 backend/preference_pipeline.py)
+
+- [x] **M9** UI 双 tab + 偏好 Worker 通道 + 偏好 Result 页(2026-06-05;stub 走通)
+- [x] **M10** 读取 + 列规范化(2026-06-05;7 项对照 pandas 全过,合计 41 项)
+- [x] **M11** _analyze 复刻(2026-06-05;R 全部 19 个 key 逐位一致,含 numpy introsort 移植;合计 61 项)
+- [x] **M12** HTML 报告 + Excel 23 sheet(2026-06-05;html 逐字节一致,xlsx 全字段一致仅平局重排;合计 62 项测试)
+- [x] **M13** 端到端全字段 diff + 部署上线(2026-06-05)
+
 ## 结构
 
 ```
@@ -62,6 +70,30 @@ python3 scripts/diff_xlsx.py             # 逐 sheet/单元格/样式/锚点 dif
 
 约定不比的两项:图片字节(Canvas vs matplotlib 光栅化必然不同,由 chart.test.ts
 的几何对照 + 浏览器目检保障)、批注外形尺寸(ExcelJS 不支持设置)。
+
+## 偏好分析的回归验证流程(M13)
+
+```bash
+python3 scripts/gen_baseline_preference.py        # Python 真跑 → baseline/python-pref/(~55s)
+npx vite-node scripts/gen_js_preference.ts        # JS 版 → baseline/js-pref/(~8s)
+npx vitest run src/__tests__/preferenceHtml.test.ts   # html 逐字节对比(需先有基准)
+python3 scripts/diff_xlsx.py baseline/python-pref/客户偏好分析数据.xlsx baseline/js-pref/客户偏好分析数据.xlsx
+```
+
+**平局重排**:排序值相等的行,行序允许不同(diff 自动归类为可接受)。原因:numpy 2.x
+的 SIMD argsort 平局顺序跨平台/版本不稳定,Python 版自己换台机器跑都会变。
+
+## pandas 数值语义速查(改聚合代码前必读)
+
+| Python 写法 | 语义 | JS 对应(preferenceAnalyze.ts) |
+|---|---|---|
+| `groupby().sum()/mean()` | Kahan 补偿求和 | `gsum` / `gmean` |
+| `Series.sum()/mean()`(无 bottleneck) | numpy pairwise(8 累加器+128 分块) | `psum` / `pmean` / `npPairwiseSum` |
+| 内建 `round(x, d)` | 对 double 精确十进制 half-even | `pyRound`(BigInt 精确) |
+| `.round(d)`(pandas/np) | 乘 10^d 后 half-even(带乘法误差) | `npRound` |
+| `sort_values(ascending=False)` | 反转输入→升序 argsort→再反转 | `sortValuesDesc`(内含 numpy introsort 移植) |
+| 多列 sort_values | 稳定 lexsort | `sortByDescStable` |
+| `int(x)` | 向零截断 | `pyInt` |
 
 ## 维护笔记
 

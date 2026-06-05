@@ -1,40 +1,37 @@
-// App.tsx — 顶层路由:upload → run(→ result,M5 起)。布局壳复刻旧版 App.jsx。
+// App.tsx — 顶层路由:upload → run → result。布局壳复刻旧版 App.jsx。
 import { useRef, useState } from 'react';
 import Upload from './components/Upload';
 import Run from './components/Run';
 import Result from './components/Result';
+import PreferenceResult from './components/PreferenceResult';
 import { IconLogo } from './components/icons';
 import { startJob } from './api';
-import type { JobError, JobHandle, JobInputFile, PreviewImage } from './api';
-import type { JobSummary, LogMessage } from './types/pipeline';
+import type { JobDone, JobError, JobHandle, JobInputFile, PreviewImage } from './api';
+import type { AnalysisMode, LogMessage } from './types/pipeline';
 
 type Stage = 'upload' | 'run' | 'result';
 
-interface JobResult {
-  filename: string;
-  buffer: ArrayBuffer;
-  summary: JobSummary;
-}
-
 export default function App() {
   const [stage, setStage] = useState<Stage>('upload');
+  const [mode, setMode] = useState<AnalysisMode>('trend');
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [previews, setPreviews] = useState<PreviewImage[]>([]);
-  const [result, setResult] = useState<JobResult | null>(null);
+  const [result, setResult] = useState<JobDone | null>(null);
   const [error, setError] = useState<JobError | null>(null);
   const jobRef = useRef<JobHandle | null>(null);
 
-  const handleStart = (inputs: JobInputFile[]) => {
+  const handleStart = (jobMode: AnalysisMode, inputs: JobInputFile[]) => {
+    setMode(jobMode);
     setLogs([]);
     setPreviews([]);
     setResult(null);
     setError(null);
     setStage('run');
-    jobRef.current = startJob(inputs, {
+    jobRef.current = startJob(jobMode, inputs, {
       onLog: (log) => setLogs((prev) => [...prev, log]),
       onPreview: (images) => setPreviews(images),
-      onDone: (filename, buffer, summary) => {
-        setResult({ filename, buffer, summary });
+      onDone: (done) => {
+        setResult(done);
         // 同旧版:让「完成」状态在步骤条上停留一瞬再跳转
         setTimeout(() => setStage('result'), 600);
       },
@@ -54,19 +51,29 @@ export default function App() {
         <div className="max-w-[960px] mx-auto h-full px-6 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <IconLogo size={18} />
-            <span className="text-[13px] text-ink font-medium">商品趋势分析</span>
-            <span className="text-[11px] text-ink3 font-mono ml-2 hidden sm:inline">web v0.1</span>
+            <span className="text-[13px] text-ink font-medium">分析工具</span>
+            <span className="text-[11px] text-ink3 font-mono ml-2 hidden sm:inline">web v0.2</span>
           </div>
         </div>
       </header>
 
       <main className="flex-1">
         {stage === 'upload' && <Upload onStart={handleStart} />}
-        {stage === 'run' && <Run logs={logs} previews={previews} error={error} onBack={handleBack} />}
-        {stage === 'result' && result && (
+        {stage === 'run' && (
+          <Run mode={mode} logs={logs} previews={previews} error={error} onBack={handleBack} />
+        )}
+        {stage === 'result' && result?.mode === 'trend' && (
           <Result
             filename={result.filename}
             buffer={result.buffer}
+            summary={result.summary}
+            onAgain={handleBack}
+          />
+        )}
+        {stage === 'result' && result?.mode === 'preference' && (
+          <PreferenceResult
+            html={result.html}
+            xlsx={result.xlsx}
             summary={result.summary}
             onAgain={handleBack}
           />

@@ -14,7 +14,7 @@ import type {
 
 // ── 基础工具 ─────────────────────────────────────────────────────────────
 
-function readWorkbook(data: ArrayBuffer | Uint8Array): XLSX.WorkBook {
+export function readWorkbook(data: ArrayBuffer | Uint8Array): XLSX.WorkBook {
   const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
   // raw 数值模式(日期保持 Excel serial,自己转,避免时区坑);关掉不需要的解析省内存
   return XLSX.read(u8, {
@@ -37,7 +37,7 @@ const PANDAS_NA_VALUES = new Set([
 ]);
 
 /** sheet → 行数组(含空行,trim 掉尾部全空行)。等价 pandas 不跳过中间空行的行为 */
-function sheetToRows(ws: XLSX.WorkSheet): Cell[][] {
+export function sheetToRows(ws: XLSX.WorkSheet): Cell[][] {
   const rows: Cell[][] = XLSX.utils.sheet_to_json(ws, {
     header: 1,
     defval: null,
@@ -54,7 +54,7 @@ function sheetToRows(ws: XLSX.WorkSheet): Cell[][] {
   return rows.slice(0, end);
 }
 
-function sheetWidth(ws: XLSX.WorkSheet): number {
+export function sheetWidth(ws: XLSX.WorkSheet): number {
   const ref = ws['!ref'];
   if (!ref) return 0;
   return XLSX.utils.decode_range(ref).e.c + 1;
@@ -64,7 +64,7 @@ function sheetWidth(ws: XLSX.WorkSheet): number {
  * pandas 风格列名:空表头 → "Unnamed: {i}",重名 → "name.1" / "name.2"。
  * 宽度按整张 sheet 算(数据行比表头宽时 pandas 也会补 Unnamed 列)。
  */
-function pandasColumns(headerCells: Cell[], width: number): string[] {
+export function pandasColumns(headerCells: Cell[], width: number): string[] {
   const names: string[] = [];
   const counts = new Map<string, number>();
   for (let i = 0; i < width; i++) {
@@ -89,7 +89,7 @@ export function keyOf(v: Cell): string {
 }
 
 /** pd.to_numeric(errors='coerce'):失败返回 null */
-function toNumeric(v: Cell): number | null {
+export function toNumeric(v: Cell): number | null {
   if (v == null) return null;
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (typeof v === 'boolean') return v ? 1 : 0;
@@ -104,7 +104,7 @@ function toNumeric(v: Cell): number | null {
  * pd.to_datetime(errors='coerce') 的等价:支持 Excel serial(数字)、Date、
  * "2026-01-01 12:30:45" / "2026/1/5" 等字符串。返回 UTC ms,失败 null。
  */
-function parseDateValue(v: Cell, date1904: boolean): number | null {
+export function parseDateValue(v: Cell, date1904: boolean): number | null {
   if (v == null) return null;
   if (v instanceof Date) return v.getTime();
   if (typeof v === 'number') {
@@ -123,7 +123,7 @@ function parseDateValue(v: Cell, date1904: boolean): number | null {
   return null;
 }
 
-function msToDateStr(ms: number): string {
+export function msToDateStr(ms: number): string {
   const d = new Date(ms);
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');

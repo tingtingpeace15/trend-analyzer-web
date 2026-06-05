@@ -14,6 +14,13 @@ export function classifyFile(name: string): FileRole | null {
   return null;
 }
 
+// 偏好分析只需 1 个销售明细文件,文件名带 拿货历史 / 客户偏好 / 拿货 即合规
+const PREFERENCE_PATTERNS: RegExp[] = [/拿货历史/, /客户偏好/, /拿货/];
+
+export function classifyPreferenceFile(name: string): FileRole | null {
+  return PREFERENCE_PATTERNS.some((rx) => rx.test(name)) ? '拿货历史' : null;
+}
+
 export function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;

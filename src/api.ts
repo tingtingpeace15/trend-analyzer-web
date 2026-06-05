@@ -1,11 +1,16 @@
 // api.ts — 主线程跟 pipeline Worker 的通信封装。
 // 旧版 api.jsx 是 fetch + SSE;网页版没有后端,这里换成 Worker 消息,但对 UI 暴露同样的"任务 + 日志流"心智模型。
 import type {
+  AnalysisMode,
+  DoneMessage,
   FileRole,
-  JobSummary,
   LogMessage,
   WorkerToMainMessage,
 } from './types/pipeline';
+
+/** done 消息去掉 type 字段后的结果载荷(趋势/偏好两种形态) */
+export type JobDone = Omit<Extract<DoneMessage, { mode: 'trend' }>, 'type'>
+  | Omit<Extract<DoneMessage, { mode: 'preference' }>, 'type'>;
 
 export interface JobInputFile {
   role: FileRole;
@@ -27,7 +32,7 @@ export interface JobError {
 export interface JobCallbacks {
   onLog: (log: LogMessage) => void;
   onPreview?: (images: PreviewImage[]) => void;
-  onDone: (filename: string, buffer: ArrayBuffer, summary: JobSummary) => void;
+  onDone: (done: JobDone) => void;
   onError: (error: JobError) => void;
 }
 
@@ -39,7 +44,7 @@ export interface JobHandle {
  * 启动一次分析:读文件 → 以 transferable ArrayBuffer 传给 Worker → 把 Worker 消息转回调。
  * cancel() 直接 terminate Worker(没有后端任务要清理)。
  */
-export function startJob(inputs: JobInputFile[], cb: JobCallbacks): JobHandle {
+export function startJob(mode: AnalysisMode, inputs: JobInputFile[], cb: JobCallbacks): JobHandle {
   const worker = new Worker(
     new URL('./workers/pipeline.worker.ts', import.meta.url),
     { type: 'module' },
@@ -57,7 +62,7 @@ export function startJob(inputs: JobInputFile[], cb: JobCallbacks): JobHandle {
         cb.onPreview?.(msg.images);
         break;
       case 'done':
-        cb.onDone(msg.filename, msg.buffer, msg.summary);
+        cb.onDone(msg);
         break;
       case 'error':
         cb.onError({ message: msg.message, hint: msg.hint, step: msg.step });
@@ -85,7 +90,7 @@ export function startJob(inputs: JobInputFile[], cb: JobCallbacks): JobHandle {
       );
       if (!alive) return;
       worker.postMessage(
-        { type: 'run', files },
+        { type: 'run', mode, files },
         files.map((f) => f.buffer),
       );
     } catch (err) {

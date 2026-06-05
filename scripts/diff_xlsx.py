@@ -119,7 +119,9 @@ for name in wb_py.sheetnames:
         if (hp is None) != (hj is None) or (hp is not None and hj is not None and not close(hp, hj)):
             report("行高", f"{tag} row{row}: {hp} vs {hj}")
 
-    # 单元格
+    # 单元格(值差先暂存,sheet 结束后判断是否为"平局重排")
+    val_mismatch_rows = set()
+    val_examples = []
     max_r = min(ws_p.max_row, ws_j.max_row)
     max_c = min(ws_p.max_column, ws_j.max_column)
     for r in range(1, max_r + 1):
@@ -127,7 +129,9 @@ for name in wb_py.sheetnames:
             cp, cj = ws_p.cell(r, c), ws_j.cell(r, c)
             addr = f"{tag} {openpyxl.utils.get_column_letter(c)}{r}"
             if not eq_val(cp.value, cj.value):
-                report("单元格值", f"{addr}: {cp.value!r} vs {cj.value!r}")
+                val_mismatch_rows.add(r)
+                if len(val_examples) < MAX_EXAMPLES:
+                    val_examples.append(f"{addr}: {cp.value!r} vs {cj.value!r}")
             if cp.number_format != cj.number_format:
                 report("数字格式", f"{addr}: {cp.number_format!r} vs {cj.number_format!r}")
             if font_sig(cp.font) != font_sig(cj.font):
@@ -143,6 +147,29 @@ for name in wb_py.sheetnames:
             tj = cj.comment.text if cj.comment else None
             if (tp or tj) and tp != tj:
                 report("批注", f"{addr}: {tp!r:.80} vs {tj!r:.80}")
+
+    # 值差判定:整行多重集一致 → 平局重排(排序键相等的行,numpy SIMD argsort
+    # 与经典 introsort 的平局顺序不同,且 numpy 自身跨平台/版本也不稳定——
+    # Python 版换台机器跑同样会变,故视为可接受;否则按真实值差报错。
+    if val_mismatch_rows:
+        def row_tuple(ws, r):
+            return tuple(
+                round(v, 6) if isinstance(v, float) else v
+                for v in (ws.cell(r, c).value for c in range(1, max_c + 1))
+            )
+        from collections import Counter as _C
+        rows_p = _C(row_tuple(ws_p, r) for r in range(2, max_r + 1))
+        rows_j = _C(row_tuple(ws_j, r) for r in range(2, max_r + 1))
+        if rows_p == rows_j:
+            issues["平局重排(行多重集一致,可接受)"] += len(val_mismatch_rows)
+            examples.setdefault("平局重排(行多重集一致,可接受)", []).extend(
+                val_examples[: max(0, MAX_EXAMPLES - len(examples.get("平局重排(行多重集一致,可接受)", [])))])
+        else:
+            for ex in val_examples:
+                report("单元格值", ex)
+            extra = len(val_mismatch_rows) - len(val_examples)
+            if extra > 0:
+                issues["单元格值"] += extra
 
 # ── 列宽(直接解析 worksheet XML 的 <col min max width>,展开范围后逐列比)──
 WS_NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -206,12 +233,21 @@ for k in sorted(set(an_p) | set(an_j)):
 
 # ── 汇总 ──
 print("=" * 64)
-if not issues:
-    print("✅ 全部一致(图片字节与批注外形尺寸按约定不比)")
+TIE_KEY = "平局重排(行多重集一致,可接受)"
+real = {k: v for k, v in issues.items() if k != TIE_KEY}
+if not real:
+    tie = issues.get(TIE_KEY, 0)
+    extra = f"(另有 {tie} 行平局重排,内容多重集一致,可接受)" if tie else ""
+    print(f"✅ 全部一致{extra}(图片字节与批注外形尺寸按约定不比)")
+    if tie:
+        for ex in examples.get(TIE_KEY, [])[:3]:
+            print(f"   平局示例: {ex}")
     sys.exit(0)
-total = sum(issues.values())
-print(f"❌ 共 {total} 处差异,按类别:")
+total = sum(real.values())
+print(f"❌ 共 {total} 处实质差异,按类别:")
 for cat, n in issues.most_common():
+    if cat == TIE_KEY:
+        continue
     print(f"\n── {cat} × {n}")
     for ex in examples[cat]:
         print(f"   {ex}")
