@@ -32,6 +32,14 @@ const HEAD_TAIL = ['销售量', '总销售金额', '盈利金额'];
  * 注意:这是对 Python 版列序的有意偏离;若 Python 版同步改,diff 才会一致。
  */
 const PINNED_AFTER_QTY = ['A价'];
+
+/** 钉位匹配用的列名规范化:去首尾空白、去尾部冒号(滞销表表头常带 ":")、
+ *  全角字母转半角、拉丁字母统一大写。输出列头仍保留原始写法(透传原则)。 */
+function normFieldName(s: string): string {
+  return s.trim().replace(/[:：]+$/, '')
+    .replace(/[Ａ-Ｚａ-ｚ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .toUpperCase();
+}
 const HEAD_KNOWN_WIDTHS = [18, 14, 12, 10, 10, 10, 12, 10, 12, 10];
 const DETAIL_KNOWN_WIDTHS = [16, 14, 12, 10, 10, 10, 12, 10, 12, 10];
 const META3_KNOWN_WIDTHS = [14, 14, 12, 10, 10, 10, 12, 10, 12, 10];
@@ -196,8 +204,9 @@ export async function writeExcel(
   };
 
   // 透传字段分两组:固定排位组(销售量之后)+ 默认组(可售库存之后)
-  const pinnedAfterQty = PINNED_AFTER_QTY.filter((f) => extraFields.includes(f));
-  const extraRest = extraFields.filter((f) => !pinnedAfterQty.includes(f));
+  const pinnedNorm = new Set(PINNED_AFTER_QTY.map(normFieldName));
+  const pinnedAfterQty = extraFields.filter((f) => pinnedNorm.has(normFieldName(f)));
+  const extraRest = extraFields.filter((f) => !pinnedNorm.has(normFieldName(f)));
   const headers = [
     ...HEAD_KNOWN, ...extraRest,
     HEAD_TAIL[0], ...pinnedAfterQty, HEAD_TAIL[1], HEAD_TAIL[2],
