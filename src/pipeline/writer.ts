@@ -34,10 +34,12 @@ const HEAD_TAIL = ['销售量', '总销售金额', '盈利金额'];
 const PINNED_AFTER_QTY = ['A价'];
 
 /** 钉位匹配用的列名规范化:去首尾空白、去尾部冒号(滞销表表头常带 ":")、
- *  全角字母转半角、拉丁字母统一大写。输出列头仍保留原始写法(透传原则)。 */
+ *  NFKD 兼容分解 + 去变音符号(实测客户表头是 "À价"——A 带重音!)、
+ *  全角转半角(NFKD 顺带覆盖)、统一大写。输出列头仍保留原始写法(透传原则)。 */
 function normFieldName(s: string): string {
   return s.trim().replace(/[:：]+$/, '')
-    .replace(/[Ａ-Ｚａ-ｚ]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase();
 }
 const HEAD_KNOWN_WIDTHS = [18, 14, 12, 10, 10, 10, 12, 10, 12, 10];
