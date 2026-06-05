@@ -110,3 +110,6 @@ python3 scripts/diff_xlsx.py baseline/python-pref/客户偏好分析数据.xlsx 
 - 文件分类按文件名正则(滞销 / 拿货历史 / 销售明细…),UI 和 Worker 共用 `utils/files.ts`,改关键词只改一处。
 - 第一版**严格复刻 Python 版输出**:不加智能时间窗、不拉长横轴、不用原生 sparkline(用户明确拒绝过)。
 - 滞销表未知字段**自动透传**是核心需求,M3/M5 实现时参考 `pipeline.py` 的 `KNOWN_ZHIXIAO_FIELDS` + `extra_fields`。
+- 钉位字段(`writer.ts` 的 `PINNED_AFTER_QTY`,现仅 A价)按 trim+去尾冒号后精确匹配。
+  2026-06-05 踩坑:客户源数据表头曾是「À价」(A 带重音,肉眼难辨)导致匹配失效——
+  以后任何"字段配置了不生效",先把表头原文逐字符检查(`[...s].map(c=>c.codePointAt(0))`)。
