@@ -49,8 +49,9 @@ function download(buffer: ArrayBuffer, filename: string, mime: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export default function PreferenceResult({ html, xlsx, summary, onAgain }: {
+export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain }: {
   html: FilePayload;
+  newHtml: FilePayload;
   xlsx: FilePayload;
   summary: PreferenceSummary;
   onAgain: () => void;
@@ -63,6 +64,11 @@ export default function PreferenceResult({ html, xlsx, summary, onAgain }: {
     [html],
   );
   useEffect(() => () => URL.revokeObjectURL(htmlUrl), [htmlUrl]);
+  const newHtmlUrl = useMemo(
+    () => URL.createObjectURL(new Blob([newHtml.buffer], { type: 'text/html' })),
+    [newHtml],
+  );
+  useEffect(() => () => URL.revokeObjectURL(newHtmlUrl), [newHtmlUrl]);
 
   return (
     <div className="max-w-[960px] mx-auto px-6 py-12 sm:py-16">
@@ -142,6 +148,35 @@ export default function PreferenceResult({ html, xlsx, summary, onAgain }: {
               </a>
               <button
                 onClick={() => download(html.buffer, html.filename, 'text/html')}
+                className="shrink-0 h-9 px-3.5 rounded-btn bg-ink text-white text-[13px] font-medium hover:bg-black transition-colors"
+              >
+                下载
+              </button>
+            </div>
+          </div>
+
+          {/* 新增 — 新客户偏好分析:预览 + 下载 */}
+          <div className="w-full rounded-card border border-line bg-white px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-md bg-[#FAFAFA] border border-line flex items-center justify-center shrink-0 text-ink2">
+                <IconChart size={16} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold text-ink">新客户偏好分析</div>
+                <div className="mt-0.5 text-[12px] text-ink3 font-mono truncate">
+                  {newHtml.filename} · {formatBytes(newHtml.buffer.byteLength)} · 新版客户偏好看板
+                </div>
+              </div>
+              <a
+                href={newHtmlUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 h-9 px-3.5 rounded-btn border border-brand text-brand text-[13px] font-medium hover:bg-brand-soft transition-colors inline-flex items-center"
+              >
+                新标签页预览
+              </a>
+              <button
+                onClick={() => download(newHtml.buffer, newHtml.filename, 'text/html')}
                 className="shrink-0 h-9 px-3.5 rounded-btn bg-ink text-white text-[13px] font-medium hover:bg-black transition-colors"
               >
                 下载

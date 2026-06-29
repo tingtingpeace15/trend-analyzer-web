@@ -5,6 +5,7 @@ import { readSales, readZhixiao } from '../pipeline/reader';
 import { loadPreference } from '../pipeline/preferenceReader';
 import { analyzePreference, TOP_N } from '../pipeline/preferenceAnalyze';
 import { buildPreferenceHtml } from '../pipeline/preferenceHtml';
+import { buildNewPreferenceHtml, loadPreferenceOrderIds } from '../pipeline/preferenceNewHtml';
 import { buildPreferenceExcel } from '../pipeline/preferenceExcel';
 import { aggregate } from '../pipeline/aggregator';
 import { buildDetailScene, buildSmallScene, sceneToPng } from '../pipeline/chart';
@@ -238,6 +239,9 @@ async function runPreference(files: { role: string; name: string; buffer: ArrayB
   banner('生成网页报告', 3);
   const htmlBytes = new TextEncoder().encode(buildPreferenceHtml(R)).buffer as ArrayBuffer;
   log(`  ✓ 网页报告已生成（${(htmlBytes.byteLength / 1024).toFixed(0)} KB）`, 'done', 3);
+  const orderIds = loadPreferenceOrderIds(input.buffer);
+  const newHtmlBytes = new TextEncoder().encode(buildNewPreferenceHtml(data, orderIds, R)).buffer as ArrayBuffer;
+  log(`  ✓ 新客户偏好分析已生成（${(newHtmlBytes.byteLength / 1024).toFixed(0)} KB）`, 'done', 3);
 
   // ---------- 步骤 4:生成 Excel 数据表 ----------
   banner('生成 Excel 数据表', 4);
@@ -257,6 +261,7 @@ async function runPreference(files: { role: string; name: string; buffer: ArrayB
       type: 'done',
       mode: 'preference',
       html: { filename: '客户偏好分析报告.html', buffer: htmlBytes },
+      newHtml: { filename: '新客户偏好分析.html', buffer: newHtmlBytes },
       xlsx: { filename: '客户偏好分析数据.xlsx', buffer: xlsxBuf },
       summary: {
         records: sm.records as number,
@@ -266,6 +271,6 @@ async function runPreference(files: { role: string; name: string; buffer: ArrayB
         dateTo: sm.date_to as string,
       },
     },
-    [htmlBytes, xlsxBuf],
+    [htmlBytes, newHtmlBytes, xlsxBuf],
   );
 }
