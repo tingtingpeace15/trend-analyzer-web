@@ -22,6 +22,15 @@ const ACCEPTANCE_SEGMENTS = ['低价带', '主流价带', '高价带'] as const;
 
 const INLINE_ECHARTS_SCRIPT = echartsSource.replace(/<\/script/gi, '<\\/script');
 
+function jsonForScriptData(value: unknown): string {
+  return pyJsonDumps(value)
+    .replace(/&/g, '\\u0026')
+    .replace(/</g, '\\u003C')
+    .replace(/>/g, '\\u003E')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 type PriceSegmentation = {
   lowCutoff: number;
   highCutoff: number;
@@ -2730,6 +2739,7 @@ function buildPriceAcceptanceAnalysis(data: PreferenceData, orderIds: (Cell | nu
 }
 
 function buildPreferenceContentHtml(R: unknown): string {
+  const reportJson = jsonForScriptData(R);
   return `<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>新客户偏好分析</title>
@@ -2969,8 +2979,10 @@ tr:hover td{background:#f8fafc}
 <div class="kpi" id="kpi"></div>
 <div class="tabs" id="tabs"></div>
 <div class="body" id="bd"></div>
+<script type="application/json" id="reportData">${reportJson}</script>
 <script>
-const D=${pyJsonDumps(R)};
+const reportDataEl=document.getElementById('reportData');
+const D=JSON.parse(reportDataEl&&reportDataEl.textContent?reportDataEl.textContent:'{}');
 const S=D.summary;
 const P={amount:'#155cff',qty:'#12b76a',coverage:'#6d4aff',trend:'#ff8a00',muted:'#a6b1c6',soft:'#eaf1ff',ink:'#10205f'};
 const C=['#155cff','#12b76a','#ff8a00','#6d4aff','#00a6ff','#10205f','#22c55e','#a855f7','#f59e0b','#64748b'];
