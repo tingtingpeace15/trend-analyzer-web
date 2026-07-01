@@ -22,21 +22,27 @@ const ACCEPTANCE_SEGMENTS = ['低价带', '主流价带', '高价带'] as const;
 
 const INLINE_ECHARTS_SCRIPT = echartsSource.replace(/<\/script/gi, '<\\/script');
 
+type PriceSegmentation = {
+  lowCutoff: number;
+  highCutoff: number;
+};
+
 export function loadPreferenceOrderIds(bytes: ArrayBuffer | Uint8Array): (Cell | null)[] {
   return loadAlignedPreviewColumnValues(bytes, ['销退单ID', '订单号', '订单ID', '单据编号']);
 }
 
 export function buildNewPreferenceHtml(data: PreferenceData, orderIds: (Cell | null)[], base: AnalyzeResult): string {
   const R = { ...base } as Record<string, unknown>;
+  const priceSegmentation = buildPriceSegmentation(data);
   R.overview_analysis = buildOverviewAnalysis(data, orderIds);
   R.category_preference_analysis = buildCategoryPreferenceAnalysis(data, orderIds);
   R.color_preference_analysis = buildColorPreferenceAnalysis(data);
   R.size_preference_analysis = buildSizePreferenceAnalysis(data);
   R.price_analysis = buildCustomerCategoryPriceAnalysis(data, orderIds);
-  R.price_acceptance_analysis = buildPriceAcceptanceAnalysis(data, orderIds);
+  R.price_acceptance_analysis = buildPriceAcceptanceAnalysis(data, orderIds, priceSegmentation);
   R.brand_style_analysis = buildBrandStyleAnalysis(data);
   R.season_preference_analysis = buildSeasonPreferenceAnalysis(data, orderIds);
-  R.customer_visual_profiles = buildCustomerVisualProfiles(data, orderIds);
+  R.customer_visual_profiles = buildCustomerVisualProfiles(data, orderIds, priceSegmentation);
   return buildPreferenceContentHtml(R);
 }
 
@@ -119,9 +125,26 @@ function acceptancePriceBand(price: number): string {
   return '500+';
 }
 
-function acceptanceSegment(price: number): string {
-  if (price < 80) return '低价带';
-  if (price < 150) return '主流价带';
+function buildPriceSegmentation(data: PreferenceData): PriceSegmentation {
+  const values: { price: number; qty: number }[] = [];
+  for (let i = 0; i < data.rawRowCount; i++) {
+    const qty = data.qty[i];
+    const amount = data.amt[i];
+    if (!Number.isFinite(qty) || !Number.isFinite(amount) || qty <= 0 || amount <= 0) continue;
+    const price = amount / qty;
+    if (Number.isFinite(price) && price > 0) values.push({ price, qty });
+  }
+  const lowCutoff = round1(weightedPricePercentile(values, 1 / 3));
+  const highCutoff = round1(weightedPricePercentile(values, 2 / 3));
+  if (!Number.isFinite(lowCutoff) || !Number.isFinite(highCutoff) || lowCutoff <= 0 || highCutoff <= lowCutoff) {
+    return { lowCutoff: 80, highCutoff: 150 };
+  }
+  return { lowCutoff, highCutoff };
+}
+
+function acceptanceSegment(price: number, segmentation: PriceSegmentation): string {
+  if (price < segmentation.lowCutoff) return '低价带';
+  if (price < segmentation.highCutoff) return '主流价带';
   return '高价带';
 }
 
@@ -1508,7 +1531,7 @@ function buildSizePreferenceAnalysis(data: PreferenceData) {
   };
 }
 
-function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | null)[]) {
+function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | null)[], segmentation: PriceSegmentation) {
   const custCol = data.cols.get('客户名称');
   if (!custCol) return { customers: [], profiles: [] };
   const catCol = data.cols.get('分类');
@@ -1541,7 +1564,9 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
   };
 
   type ProfileGroup = {
+    key: string;
     customer: string;
+    brand: string | null;
     amount: number;
     qty: number;
     orderKeys: Set<string>;
@@ -1559,6 +1584,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
   };
 
   type RepeatOrderGroup = {
+    groupKey: string;
     customer: string;
     product: string;
     category: string;
@@ -1571,11 +1597,15 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
 
   const groups = new Map<string, ProfileGroup>();
   const productOrders = new Map<string, RepeatOrderGroup>();
-  const getGroup = (customer: string) => {
-    let g = groups.get(customer);
+  const profileGroupKey = (customer: string, brand: string | null) => (brand ? `${customer}\u0000${brand}` : customer);
+  const getGroup = (customer: string, brand: string | null = null) => {
+    const key = profileGroupKey(customer, brand);
+    let g = groups.get(key);
     if (!g) {
       g = {
+        key,
         customer,
+        brand,
         amount: 0,
         qty: 0,
         orderKeys: new Set(),
@@ -1591,7 +1621,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
         categoryPrices: new Map(),
         colorDetails: new Map(),
       };
-      groups.set(customer, g);
+      groups.set(key, g);
     }
     return g;
   };
@@ -1630,73 +1660,79 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     const price = amount > 0 && qty > 0 ? amount / qty : NaN;
     const hasEffectivePrice = Number.isFinite(price) && price > 0;
     const key = orderKey(orderIds, i, customer);
-    const g = getGroup(customer);
-    g.amount += amount;
-    g.qty += qty;
-    g.orderKeys.add(key);
-    if (hasEffectivePrice) {
-      g.priceValues.push(price);
-      addNumber(g.priceBands, priceBand(price), amount);
-      addNumber(g.priceSegments, acceptanceSegment(price), amount);
-    }
     const year = yearCol ? cellText(yearCol[i]) : null;
-    addNumber(g.seasons, year || '未填写', amount);
     const category = catCol ? cellText(catCol[i]) : null;
     const product = productCol ? cellText(productCol[i]) ?? '未标记' : '未标记';
     const brand = brandCol ? cellText(brandCol[i]) : null;
     const designer = designerCol ? cellText(designerCol[i]) : null;
     const color = colorCol ? normalizeColorName(colorCol[i]) : null;
     const size = sizeCol ? cellText(sizeCol[i]) : null;
-    if (category) {
-      addNumber(g.categories, category, amount);
-      let cp = g.categoryPrices.get(category);
-      if (!cp) {
-        cp = { amount: 0, qty: 0, prices: [], bandAmounts: new Map(), bandQty: new Map(), orderKeys: new Set() };
-        g.categoryPrices.set(category, cp);
-      }
-      cp.amount += amount;
-      cp.qty += qty;
-      if (hasEffectivePrice) {
-        const band = priceBand(price);
-        cp.prices.push(price);
-        addNumber(cp.bandAmounts, band, amount);
-        addNumber(cp.bandQty, band, qty);
-      }
-      cp.orderKeys.add(key);
-    }
-    if (brand) addNumber(g.brands, brand, amount);
-    if (designer) addNumber(g.designers, designer, amount);
-    if (color) {
-      addNumber(g.colors, color, qty);
-      if (isPositiveSale(amount, qty)) addColorBreakdown(g, color, category, brand, amount, qty);
-    }
-    if (size) addNumber(g.sizes, size, qty);
 
-    if (isPositiveSale(amount, qty)) {
-      const productOrderKey = `${customer}\u0000${product}\u0000${key}`;
-      let po = productOrders.get(productOrderKey);
-      if (!po) {
-        po = {
-          customer,
-          product,
-          category: category || '未分类',
-          orderKey: key,
-          amount: 0,
-          qty: 0,
-          ms: Number.POSITIVE_INFINITY,
-          lineIndex: i,
-        };
-        productOrders.set(productOrderKey, po);
+    const targetGroups = [getGroup(customer)];
+    if (brand) targetGroups.push(getGroup(customer, brand));
+
+    for (const g of targetGroups) {
+      g.amount += amount;
+      g.qty += qty;
+      g.orderKeys.add(key);
+      if (hasEffectivePrice) {
+        g.priceValues.push(price);
+        addNumber(g.priceBands, priceBand(price), amount);
+        addNumber(g.priceSegments, acceptanceSegment(price, segmentation), amount);
       }
-      po.amount += amount;
-      po.qty += qty;
-      const ms = data.orderMs?.[i];
-      if (ms != null && Number.isFinite(ms)) po.ms = Math.min(po.ms, ms);
-      po.lineIndex = Math.min(po.lineIndex, i);
+      addNumber(g.seasons, year || '未填写', amount);
+      if (category) {
+        addNumber(g.categories, category, amount);
+        let cp = g.categoryPrices.get(category);
+        if (!cp) {
+          cp = { amount: 0, qty: 0, prices: [], bandAmounts: new Map(), bandQty: new Map(), orderKeys: new Set() };
+          g.categoryPrices.set(category, cp);
+        }
+        cp.amount += amount;
+        cp.qty += qty;
+        if (hasEffectivePrice) {
+          const band = priceBand(price);
+          cp.prices.push(price);
+          addNumber(cp.bandAmounts, band, amount);
+          addNumber(cp.bandQty, band, qty);
+        }
+        cp.orderKeys.add(key);
+      }
+      if (brand) addNumber(g.brands, brand, amount);
+      if (designer) addNumber(g.designers, designer, amount);
+      if (color) {
+        addNumber(g.colors, color, qty);
+        if (isPositiveSale(amount, qty)) addColorBreakdown(g, color, category, brand, amount, qty);
+      }
+      if (size) addNumber(g.sizes, size, qty);
+
+      if (isPositiveSale(amount, qty)) {
+        const productOrderKey = `${g.key}\u0000${product}\u0000${key}`;
+        let po = productOrders.get(productOrderKey);
+        if (!po) {
+          po = {
+            groupKey: g.key,
+            customer,
+            product,
+            category: category || '未分类',
+            orderKey: key,
+            amount: 0,
+            qty: 0,
+            ms: Number.POSITIVE_INFINITY,
+            lineIndex: i,
+          };
+          productOrders.set(productOrderKey, po);
+        }
+        po.amount += amount;
+        po.qty += qty;
+        const ms = data.orderMs?.[i];
+        if (ms != null && Number.isFinite(ms)) po.ms = Math.min(po.ms, ms);
+        po.lineIndex = Math.min(po.lineIndex, i);
+      }
     }
   }
 
-  const repeatByCustomer = new Map<string, {
+  const repeatByGroup = new Map<string, {
     products: Map<string, {
       product: string;
       category: string;
@@ -1705,22 +1741,22 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
   }>();
   for (const order of productOrders.values()) {
     if (!hasPositiveNet(order.amount, order.qty)) continue;
-    let customerRepeat = repeatByCustomer.get(order.customer);
-    if (!customerRepeat) {
-      customerRepeat = { products: new Map() };
-      repeatByCustomer.set(order.customer, customerRepeat);
+    let groupRepeat = repeatByGroup.get(order.groupKey);
+    if (!groupRepeat) {
+      groupRepeat = { products: new Map() };
+      repeatByGroup.set(order.groupKey, groupRepeat);
     }
-    let productRepeat = customerRepeat.products.get(order.product);
+    let productRepeat = groupRepeat.products.get(order.product);
     if (!productRepeat) {
       productRepeat = { product: order.product, category: order.category, orders: [] };
-      customerRepeat.products.set(order.product, productRepeat);
+      groupRepeat.products.set(order.product, productRepeat);
     }
     productRepeat.orders.push(order);
   }
 
-  const buildRepeatAnalysis = (customer: string) => {
-    const customerRepeat = repeatByCustomer.get(customer);
-    const productRows = [...(customerRepeat?.products.values() ?? [])]
+  const buildRepeatAnalysis = (key: string) => {
+    const groupRepeat = repeatByGroup.get(key);
+    const productRows = [...(groupRepeat?.products.values() ?? [])]
       .map((g) => {
         const orders = [...g.orders].sort((a, b) => {
           const am = Number.isFinite(a.ms) ? a.ms : Number.POSITIVE_INFINITY;
@@ -1797,9 +1833,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     };
   };
 
-  const profiles = [...groups.values()]
-    .filter((g) => hasPositiveNet(g.amount, g.qty))
-    .map((g) => {
+  const toProfile = (g: ProfileGroup) => {
       const prices = [...g.priceValues].sort((a, b) => a - b);
       const amount = Math.round(g.amount);
       const categories = metricRows(g.categories);
@@ -1863,7 +1897,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
         })
         .filter((r) => hasPositiveNet(r.amount, r.qty))
         .sort((a, b) => b.amount - a.amount);
-      const repeat = buildRepeatAnalysis(g.customer);
+      const repeat = buildRepeatAnalysis(g.key);
       const colorDetails = [...g.colorDetails.entries()]
         .map(([color, cd]) => {
           const toRows = (map: Map<string, ColorBreakdownMetric>, totalQty: number) => [...map.entries()]
@@ -1896,6 +1930,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
         .slice(0, 15);
       return {
         customer: g.customer,
+        brand: g.brand,
         amount,
         qty: Math.round(g.qty),
         orders: g.orderKeys.size,
@@ -1930,8 +1965,29 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
           { name: '客单强度', value: round1(Math.min(100, avgPrice / 3)) },
         ],
       };
-    })
+    };
+
+  const profileRows = [...groups.values()]
+    .filter((g) => hasPositiveNet(g.amount, g.qty))
+    .map(toProfile)
     .sort((a, b) => b.amount - a.amount);
+  const profiles = profileRows
+    .filter((p) => !p.brand)
+    .map((p) => {
+      const brandProfiles = profileRows
+        .filter((bp) => bp.customer === p.customer && !!bp.brand)
+        .sort((a, b) => b.amount - a.amount);
+      return {
+        ...p,
+        brand_options: brandProfiles.map((bp) => ({
+          name: bp.brand || '',
+          amount: bp.amount,
+          qty: bp.qty,
+          orders: bp.orders,
+        })),
+        brand_profiles: brandProfiles,
+      };
+    });
 
   return {
     customers: profiles.map((p) => p.customer),
@@ -2437,7 +2493,7 @@ function buildCustomerCategoryPriceAnalysis(data: PreferenceData, orderIds: (Cel
   };
 }
 
-function buildPriceAcceptanceAnalysis(data: PreferenceData, orderIds: (Cell | null)[]) {
+function buildPriceAcceptanceAnalysis(data: PreferenceData, orderIds: (Cell | null)[], segmentation: PriceSegmentation) {
   const custCol = data.cols.get('客户名称');
   const catCol = data.cols.get('分类');
 
@@ -2505,7 +2561,7 @@ function buildPriceAcceptanceAnalysis(data: PreferenceData, orderIds: (Cell | nu
     const category = catCol ? cellText(catCol[i]) ?? '未分类' : '未分类';
     const key = orderKey(orderIds, i, customer);
     const band = acceptancePriceBand(price);
-    const segment = acceptanceSegment(price);
+    const segment = acceptanceSegment(price, segmentation);
 
     allPrices.push({ price, qty });
 
@@ -2573,8 +2629,8 @@ function buildPriceAcceptanceAnalysis(data: PreferenceData, orderIds: (Cell | nu
       const highQtyShare = g.qty ? g.highQty / g.qty : 0;
       const mainAmountShare = g.amount ? g.mainAmount / g.amount : 0;
       let acceptance = '低价为主';
-      if (highAmountShare >= 0.5 || avg >= 180) acceptance = '高价承接强';
-      else if (highAmountShare >= 0.2 || p75 >= 150) acceptance = '有高价空间';
+      if (highAmountShare >= 0.5 || avg >= segmentation.highCutoff * 1.2) acceptance = '高价承接强';
+      else if (highAmountShare >= 0.2 || p75 >= segmentation.highCutoff) acceptance = '有高价空间';
       else if (mainAmountShare >= 0.5) acceptance = '主流价带稳定';
       return {
         category: g.category,
@@ -2613,8 +2669,8 @@ function buildPriceAcceptanceAnalysis(data: PreferenceData, orderIds: (Cell | nu
     .map((r) => r.category);
 
   return {
-    low_cutoff: 80,
-    high_cutoff: 150,
+    low_cutoff: segmentation.lowCutoff,
+    high_cutoff: segmentation.highCutoff,
     total_amount: Math.round(totalAmount),
     total_qty: Math.round(totalQty),
     overall: {
@@ -2702,7 +2758,16 @@ td{padding:7px 10px;border-bottom:1px solid #f0f0f0}tr:hover td{background:#f8f9
 .p-low{background:#eaf3ff;color:#155cff}.p-mid{background:#eafaf2;color:#079455}.p-high{background:#fff4e5;color:#b45309}.p-wave{background:#f3efff;color:#6d4aff}.p-lack{background:#f5f7fb;color:#777}
 .pf-head{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:16px}
 .pf-head label{font-size:12px;color:#666;display:flex;flex-direction:column;gap:5px}
-.pf-head select{min-width:260px;height:34px;border:1px solid #ddd;border-radius:7px;background:#fff;padding:0 10px}
+.pf-head select,.pf-head input{min-width:260px;height:34px;border:1px solid #ddd;border-radius:7px;background:#fff;padding:0 10px;color:#10205f}
+.pf-brand-box{position:relative;min-width:260px}
+.pf-brand-box input{width:100%;box-sizing:border-box}
+.pf-brand-box.open .pf-brand-menu{display:block}
+.pf-brand-menu{display:none;position:absolute;left:0;right:0;top:calc(100% + 5px);max-height:230px;overflow:auto;background:#fff;border:1px solid #dce7fb;border-radius:8px;box-shadow:0 12px 28px rgba(33,83,170,.16);z-index:500;padding:5px}
+.pf-brand-option{display:block;width:100%;border:0;background:transparent;text-align:left;border-radius:6px;padding:8px 9px;color:#303642;font-size:12px;line-height:1.35;cursor:pointer}
+.pf-brand-option:hover{background:#f2f7ff;color:#155cff}
+.pf-brand-option b{display:block;font-size:12px;color:inherit}
+.pf-brand-option span{display:block;margin-top:2px;color:#7a8292;font-size:11px}
+.pf-brand-empty{padding:10px;color:#8a92a3;font-size:12px}
 .pf-rec{display:block}
 .pf-rec-title{display:none}
 .pf-rec-row{display:flex;gap:8px;align-items:flex-start;margin-top:6px}
@@ -2861,7 +2926,7 @@ tr:hover td{background:#f8fafc}
 .ov-item b{color:var(--ink);font-size:15px;font-weight:760}
 .ov-item em{color:#3f4653;font-size:12px}
 .ov-item small{color:#8b94a5}
-.pf-head select{border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
+.pf-head select,.pf-head input{border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
 .pf-mini div{border:1px solid var(--line);border-radius:10px;background:linear-gradient(180deg,#fff,#f7fbff);box-shadow:none}
 .pf-mini b{color:var(--ink)}
 .pf-rec-row span,.cat-line em{background:#f7f8fa;border-color:var(--line);border-radius:999px;color:#4d5564}
@@ -3015,7 +3080,7 @@ function priceTagColor(v){return v==='低价敏感型'?'#60a5fa':v==='中价稳�
 function priceLegend(){return '<div class="legend">'+priceTags().map(function(t){return '<span><i style="background:'+priceTagColor(t)+'"></i>'+t+'</span>'}).join('')+'</div>'}
 function priceSensitivityByCategory(limit){var p=D.price_analysis||{categories:[],rows:[]};var cats=p.categories.slice(0,limit).map(function(r){return r.category});var by={};cats.forEach(function(c){by[c]={}});p.rows.forEach(function(r){if(by[r.category])by[r.category][r.tag]=n(by[r.category][r.tag])+1});return {cats:cats,datasets:priceTags().map(function(t){return {label:t,data:cats.map(function(c){return by[c][t]||0}),backgroundColor:priceTagColor(t),stack:'s'}})}}
 function renderPriceHeatmap(){var p=D.price_analysis;if(!p)return;var el=document.getElementById('priceHeatmap');if(!el)return;var cats=p.categories.slice(0,10).map(function(r){return r.category});var customers=p.matrix_customers.slice(0,18);var map={};p.rows.forEach(function(r){map[r.customer+'|'+r.category]=r});var html=priceLegend()+'<div class="heat"><table><tr><th>客户</th>'+cats.map(function(x){return '<th>'+esc(x)+'</th>'}).join('')+'</tr>';customers.forEach(function(cu){html+='<tr><td><b>'+esc(cu)+'</b></td>'+cats.map(function(ca){var r=map[cu+'|'+ca];if(!r)return '<td><span class="pcell p-lack">-<small>无记录</small></span></td>';return '<td><span class="pcell '+priceTagCls(r.tag)+'" title="'+esc(priceTitle(r))+'">'+esc(r.main_band)+'<small>¥'+r.weighted_avg+'</small></span></td>'}).join('')+'</tr>'});html+='</table></div>';el.innerHTML=html}
-function acceptData(){return D.price_acceptance_analysis||{low_cutoff:80,high_cutoff:150,overall:{},kpi:{},bands:[],segments:[],categories:[],recommendations:[]}}
+function acceptData(){return D.price_acceptance_analysis||{low_cutoff:0,high_cutoff:0,overall:{},kpi:{},bands:[],segments:[],categories:[],recommendations:[]}}
 function acceptPct(v){return (n(v)*100).toFixed(1)+'%'}
 function acceptSegColor(v){return v==='低价带'?'#60a5fa':v==='主流价带'?P.qty:P.trend}
 function acceptSegmentDesc(name){var ac=acceptData();if(name==='低价带')return '成交单价 < ¥'+ac.low_cutoff;if(name==='主流价带')return '¥'+ac.low_cutoff+' ≤ 成交单价 < ¥'+ac.high_cutoff;return '成交单价 ≥ ¥'+ac.high_cutoff}
@@ -3090,12 +3155,20 @@ function seasonTypePieBoard(id){var rows=seasonTypeRows(true),active=seasonTypeR
 function seasonCustomerTooltip(r){return ['客户 '+esc(r.customer||'-'),'客户类型 '+esc(r.type||'-'),'普通款期成交 '+money(r.normal_amount)+' / '+fmt(r.normal_qty)+'件','订货会成交 '+money(r.booking_amount)+' / '+fmt(r.booking_qty)+'件','客户总成交 '+money(r.total_amount)+' / '+fmt(r.total_qty)+'件','订货会金额占比 '+(r.booking_amount_share||0)+'%','订货会数量占比 '+(r.booking_qty_share||0)+'%','订单数 '+fmt(r.orders)+'笔']}
 function bookingHotTooltip(r,nameKey){return ['名称 '+esc(r[nameKey]||'-'),'订货会成交数量 '+fmt(r.qty)+'件','订货会成交金额 '+money(r.amount),'成交客户数 '+fmt(r.customers)+'人','订单数 '+fmt(r.orders)+'笔','拿货记录数 '+fmt(r.lines)+'条','单客户平均拿货 '+fmt(r.avg_qty_per_customer)+'件']}
 function seasonHotRows(key,limit){return positiveRows(seasonData()[key]||[],['qty','amount','customers','orders','lines']).slice().sort(function(a,b){return n(b.qty)-n(a.qty)||n(b.amount)-n(a.amount)||n(b.customers)-n(a.customers)}).slice(0,limit)}
+var PF_BRAND='';
 function pfData(){return D.customer_visual_profiles||{customers:[],profiles:[]}}
-function pfCurrent(){var p=pfData();var name=document.getElementById('pfCustomer')?.value||p.customers[0];return (p.profiles||[]).find(function(r){return r.customer===name})||p.profiles[0]}
+function pfBaseCurrent(){var p=pfData();var name=document.getElementById('pfCustomer')?.value||p.customers[0];return (p.profiles||[]).find(function(r){return r.customer===name})||p.profiles[0]}
+function pfCurrent(){var base=pfBaseCurrent();if(!base)return null;if(!PF_BRAND)return base;return (base.brand_profiles||[]).find(function(r){return r.brand===PF_BRAND})||base}
 function pfSelectOptions(){var p=pfData();return (p.customers||[]).map(function(c){return '<option value="'+esc(c)+'">'+esc(c)+'</option>'}).join('')}
+function pfBrandRows(){return valueRows(pfBaseCurrent()?.brand_options||[])}
+function pfFilteredBrandRows(showAll){var input=document.getElementById('pfBrandInput'),q=showAll?'':String(input?.value||'').trim().toLowerCase();var rows=pfBrandRows();return q?rows.filter(function(r){return String(r.name||'').toLowerCase().indexOf(q)>=0}):rows}
+function pfBrandBoxOpen(open){var box=document.getElementById('pfBrandBox');if(box)box.classList.toggle('open',!!open)}
+function renderPfBrandMenu(showAll){var menu=document.getElementById('pfBrandMenu');if(!menu)return;var rows=pfFilteredBrandRows(showAll);menu.innerHTML='<button type="button" class="pf-brand-option" data-brand-option data-brand=""><b>全部品牌</b><span>展示该客户全部品牌画像</span></button>'+rows.map(function(r){return '<button type="button" class="pf-brand-option" data-brand-option data-brand="'+esc(r.name)+'"><b>'+esc(r.name)+'</b><span>'+money(r.amount)+' / '+fmt(r.qty)+'件 / '+fmt(r.orders)+'笔订单</span></button>'}).join('')+(rows.length?'':'<div class="pf-brand-empty">当前客户没有匹配品牌</div>')}
+function refreshPfBrandOptions(){var input=document.getElementById('pfBrandInput'),base=pfBaseCurrent();if(!input||!base)return;var names=(base.brand_options||[]).map(function(r){return r.name});if(names.indexOf(PF_BRAND)<0)PF_BRAND='';input.value=PF_BRAND;renderPfBrandMenu(true)}
+function setPfBrand(brand){PF_BRAND=brand||'';var input=document.getElementById('pfBrandInput');if(input)input.value=PF_BRAND;pfBrandBoxOpen(false);renderCustomerProfile()}
 function pfMetricCards(p){document.getElementById('pfMini').innerHTML='<div><b>'+money(p.amount)+'</b><span>成交金额</span></div><div><b>'+fmt(p.qty)+'</b><span>成交数量</span></div><div><b>'+p.orders+'</b><span>订单数</span></div><div><b>¥'+p.avg_price+'</b><span>商品成交均价</span></div><div><b>¥'+p.price_low+'-'+p.price_high+'</b><span>常买价格区间</span></div>'}
 function pfNames(rows,cnt){return valueRows(rows||[]).slice(0,cnt).map(function(r){return r.name}).filter(Boolean)}
-function pfRecommendation(p){var cats=pfNames(p.categories,3),colors=pfNames(p.colors,3),sizes=pfNames(p.sizes,1),brands=pfNames(p.brands,2),designers=pfNames(p.designers,1),r=p.repeat||{},hasRepeat=!!r.has_repeat;function chips(arr){return (arr.length?arr:['暂无']).map(function(x){return '<span>'+esc(x)+'</span>'}).join('')}var priceType=(p.price_type||'待判断')+' · '+(p.main_price_segment||'-')+' '+(p.price_type_share||0)+'%',repeatText=hasRepeat?'会重复拿同一商品':'暂无明显复拿',intervalText=(r.avg_interval_days||0)?(r.avg_interval_days+'天'):'-';document.getElementById('pfRecommend').innerHTML='<b class="pf-rec-title">客户推荐画像</b><div class="pf-rec-row"><b>客户类型</b><div><span title="'+esc(p.price_type_desc||'')+'">'+esc(priceType)+'</span></div></div><div class="pf-rec-row"><b>推荐品类</b><div>'+chips(cats)+'</div></div><div class="pf-rec-row"><b>推荐颜色</b><div>'+chips(colors)+'</div></div><div class="pf-rec-row"><b>推荐尺码</b><div>'+chips(sizes)+'</div></div><div class="pf-rec-row"><b>常买价位</b><div><span>¥'+p.price_low+'-'+p.price_high+'</span></div></div><div class="pf-rec-row"><b>主品牌</b><div>'+chips(brands)+'</div></div><div class="pf-rec-row"><b>设计师品牌</b><div>'+chips(designers)+'</div></div><div class="pf-rec-row"><b>复拿情况</b><div><span title="同一货号出现2笔及以上正向拿货订单才算复拿，不含退货">'+esc(repeatText)+' · '+fmt(r.repeat_product_count||0)+'个货号</span></div></div><div class="pf-rec-row"><b>平均补货间隔</b><div><span>'+esc(intervalText)+'</span></div></div>'}
+function pfRecommendation(p){var scoped=!!p.brand,cats=pfNames(p.categories,scoped?1:3),colors=pfNames(p.colors,scoped?1:3),sizes=pfNames(p.sizes,1),brands=scoped?[p.brand]:pfNames(p.brands,2),designers=pfNames(p.designers,1),r=p.repeat||{},hasRepeat=!!r.has_repeat;function chips(arr){return (arr.length?arr:['暂无']).map(function(x){return '<span>'+esc(x)+'</span>'}).join('')}var priceType=(p.price_type||'待判断')+' · '+(p.main_price_segment||'-')+' '+(p.price_type_share||0)+'%',repeatText=hasRepeat?'会重复拿同一商品':'暂无明显复拿',intervalText=(r.avg_interval_days||0)?(r.avg_interval_days+'天'):'-';document.getElementById('pfRecommend').innerHTML='<b class="pf-rec-title">客户推荐画像</b><div class="pf-rec-row"><b>客户类型</b><div><span title="'+esc(p.price_type_desc||'')+'">'+esc(priceType)+'</span></div></div><div class="pf-rec-row"><b>推荐品类</b><div>'+chips(cats)+'</div></div><div class="pf-rec-row"><b>推荐颜色</b><div>'+chips(colors)+'</div></div><div class="pf-rec-row"><b>推荐尺码</b><div>'+chips(sizes)+'</div></div><div class="pf-rec-row"><b>常买价位</b><div><span>¥'+p.price_low+'-'+p.price_high+'</span></div></div><div class="pf-rec-row"><b>主品牌</b><div>'+chips(brands)+'</div></div><div class="pf-rec-row"><b>设计师品牌</b><div>'+chips(designers)+'</div></div><div class="pf-rec-row"><b>复拿情况</b><div><span title="同一货号出现2笔及以上正向拿货订单才算复拿，不含退货">'+esc(repeatText)+' · '+fmt(r.repeat_product_count||0)+'个货号</span></div></div><div class="pf-rec-row"><b>平均补货间隔</b><div><span>'+esc(intervalText)+'</span></div></div>'}
 function pfRepeatProductTooltip(row){return ['货号 '+esc(row.product||'-'),'品类 '+esc(row.category||'-'),'复拿金额 '+money(row.repeat_amount),'复拿数量 '+fmt(row.repeat_qty)+'件','复拿次数 '+fmt(row.repeat_count)+'次','首次 '+esc(row.first_date||'-')+' / 最近 '+esc(row.last_date||'-'),'平均间隔 '+(row.avg_interval_days||0)+'天']}
 function renderPfRepeatCharts(p){var rep=p.repeat||{},products=(rep.products||[]).filter(function(r){return n(r.repeat_qty)>0||n(r.repeat_amount)>0}).slice(0,15);mk('pfRepeatProducts',{type:'bar',data:{labels:products.map(function(r){return r.product}),datasets:[{label:'复拿数量',data:products.map(function(r){return r.repeat_qty}),backgroundColor:P.qty,xAxisID:'x',barMaxWidth:22},{label:'复拿金额',data:products.map(function(r){return r.repeat_amount}),backgroundColor:P.amount,xAxisID:'x1',barMaxWidth:22}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',grid:{left:112,right:124,top:62,bottom:78},plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:function(c){return c.dataset.xAxisID==='x1'?'复拿金额: '+money(c.raw):'复拿数量: '+fmt(c.raw)+'件'},afterBody:function(ctx){return pfRepeatProductTooltip(products[ctx[0].dataIndex]||{})}}}},scales:{x:{position:'bottom',title:{display:true,text:'复拿数量'},ticks:{callback:function(v){return fmt(v)}}},x1:{position:'top',grid:{drawOnChartArea:false},title:{display:true,text:'复拿金额'},ticks:{callback:function(v){return money(v)}}},y:{ticks:{autoSkip:false,font:{size:10}}}}}})}
 function pfColorPieTooltip(p,row,total){var d=(p.color_details||[]).find(function(x){return x.color===row.name})||{};function lines(title,items){items=(items||[]).filter(function(x){return n(x.qty)>0}).slice(0,5);if(!items.length)return '';return '<div style="margin-top:8px;padding-top:7px;border-top:1px solid rgba(255,255,255,.16)"><div style="font-weight:700;margin-bottom:4px">'+title+'</div>'+items.map(function(x){var share=n(x.share);return '<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.65"><span>'+esc(x.name)+'</span><span>'+fmt(x.qty)+'件 / '+(share*100).toFixed(1)+'%</span></div>'}).join('')+'</div>'}return '<div style="font-weight:800;margin-bottom:6px">'+esc(row.name)+'</div><div style="line-height:1.75">拿货数量：'+fmt(row.value)+'件 ('+pct(row.value,total)+')</div><div style="line-height:1.75">拿货金额：'+money(d.amount||0)+'</div>'+lines('品类占比Top5',d.categories)+lines('品牌占比Top5',d.brands)}
@@ -3254,7 +3327,7 @@ var AC=acceptData(), ACK=AC.kpi||{}, ACO=AC.overall||{};
 var highCats=(ACK.high_categories||[]).join(' / ')||'-';
 var acBands=positiveRows(AC.bands||[],['amount','qty','orders','lines']);
 var acSegments=positiveRows(AC.segments||[],['amount','qty','orders','lines']);
-document.getElementById('s-se').innerHTML='<div class="tip"><b>价格接受度洞察：</b>当前最能接受的价格段是 '+esc(ACK.most_accepted_band||'-')+'，按数量占 '+acceptPct(ACK.most_accepted_qty_share)+'；金额最高价格段是 '+esc(ACK.highest_amount_band||'-')+'，按金额占 '+acceptPct(ACK.highest_amount_share)+'。高价带按成交单价 ≥ ¥'+AC.high_cutoff+' 计算，金额占 '+acceptPct(ACK.high_amount_share)+'，主要由 '+esc(highCats)+' 承接。整体推荐价位可参考 ¥'+(ACK.recommend_low||ACO.p25||0)+'-'+(ACK.recommend_high||ACO.p75||0)+'。</div><div class="g">'
+document.getElementById('s-se').innerHTML='<div class="tip"><b>价格接受度洞察：</b>低价带 / 主流价带 / 高价带边界按本次导入成交单价的销量加权 P33 / P67 自动计算：低价带 < ¥'+AC.low_cutoff+'，主流价带 ¥'+AC.low_cutoff+'-'+AC.high_cutoff+'，高价带 ≥ ¥'+AC.high_cutoff+'。当前最能接受的价格段是 '+esc(ACK.most_accepted_band||'-')+'，按数量占 '+acceptPct(ACK.most_accepted_qty_share)+'；金额最高价格段是 '+esc(ACK.highest_amount_band||'-')+'，按金额占 '+acceptPct(ACK.highest_amount_share)+'。高价带金额占 '+acceptPct(ACK.high_amount_share)+'，主要由 '+esc(highCats)+' 承接。整体推荐价位可参考 ¥'+(ACK.recommend_low||ACO.p25||0)+'-'+(ACK.recommend_high||ACO.p75||0)+'。</div><div class="g">'
 +card('整体价格段成交结构',chart('c13',true))
 +card('低价 / 主流 / 高价成交占比',chart('c13b',false)+acceptSegmentNote())
 +card('品类价格带成交结构',chart('c13c',true)+acceptCategoryStructureNote())
@@ -3266,7 +3339,7 @@ var acCats=positiveRows(AC.categories||[],['amount','qty','orders','customers'])
 var acSegmentSeries=[{label:'低价带',field:'low_amount',share:'low_amount_share'},{label:'主流价带',field:'main_amount',share:'main_amount_share'},{label:'高价带',field:'high_amount',share:'high_amount_share'}].filter(function(s){return acCats.some(function(r){return n(r[s.field])>0})});
 mk('c13c',{type:'bar',data:{labels:acCats.map(function(r){return r.category}),datasets:acSegmentSeries.map(function(s){return {label:s.label,data:acCats.map(function(r){return r[s.field]}),backgroundColor:acceptSegColor(s.label),stack:'price',shareField:s.share}})},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:function(c){var r=acCats[c.dataIndex]||{},share=c.dataset.shareField?r[c.dataset.shareField]:0;return c.dataset.label+': '+money(c.raw)+' / 品类内金额占 '+acceptPct(share)}}}},scales:{x:{stacked:true,ticks:{callback:function(v){return money(v)}},title:{display:true,text:'各品类低价 / 主流 / 高价成交金额'}},y:{stacked:true}}}});
 
-document.getElementById('s-pf').innerHTML='<div class="tip"><b>客户画像：</b>选择客户后查看其品类、品牌设计师、颜色、尺码、价格区间和年份季节；订单数按销退单ID去重计算，凡该客户在当前数据内拿过的品类、品牌、设计师、颜色、尺码、年份季节都会计入分析。颜色饼图展示该客户净拿货数量Top15颜色；鼠标悬停颜色后可查看该颜色下的品类占比Top5和品牌占比Top5；价格区间按品类拆分展示，便于判断不同品类的主成交价带。</div><div class="pf-head"><label>客户<select id="pfCustomer">'+pfSelectOptions()+'</select></label></div><div class="pf-mini" id="pfMini"></div><div class="g">'
+document.getElementById('s-pf').innerHTML='<div class="tip"><b>客户画像：</b>选择客户后查看其品类、品牌设计师、颜色、尺码、价格区间和年份季节；品牌默认全部品牌，也可在选定客户后进一步搜索该客户拿过货的品牌，画像卡会按该客户在该品牌下的成交重新计算。订单数按销退单ID去重计算；颜色饼图展示该客户净拿货数量Top15颜色，鼠标悬停颜色后可查看该颜色下的品类占比Top5和品牌占比Top5；价格区间按品类拆分展示，便于判断不同品类的主成交价带。</div><div class="pf-head"><label>客户<select id="pfCustomer">'+pfSelectOptions()+'</select></label><label>品牌<div class="pf-brand-box" id="pfBrandBox"><input id="pfBrandInput" type="search" autocomplete="off" placeholder="全部品牌 / 搜索该客户拿过的品牌"><div class="pf-brand-menu" id="pfBrandMenu"></div></div></label></div><div class="pf-mini" id="pfMini"></div><div class="g">'
 +card('客户推荐画像卡','<div class="pf-rec" id="pfRecommend"></div>')
 +card('复拿商品排行',largeChart('pfRepeatProducts'),true)
 +card('全部品类偏好金额',chart('pfCat',false))
@@ -3276,7 +3349,14 @@ document.getElementById('s-pf').innerHTML='<div class="tip"><b>客户画像：</
 +card('品类价格区间偏好',chart('pfPrice',true),true)
 +card('年份季节',chart('pfSeason',false))
 +'</div>';
-document.getElementById('pfCustomer').onchange=renderCustomerProfile;
+refreshPfBrandOptions();
+document.getElementById('pfCustomer').onchange=function(){PF_BRAND='';refreshPfBrandOptions();renderCustomerProfile()};
+document.getElementById('pfBrandInput').onfocus=function(){renderPfBrandMenu(true);pfBrandBoxOpen(true)};
+document.getElementById('pfBrandInput').onclick=function(){renderPfBrandMenu(true);pfBrandBoxOpen(true)};
+document.getElementById('pfBrandInput').oninput=function(){PF_BRAND='';renderPfBrandMenu(false);renderCustomerProfile();pfBrandBoxOpen(true)};
+document.getElementById('pfBrandInput').onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();var rows=pfFilteredBrandRows(false);setPfBrand(rows[0]?.name||'')}else if(e.key==='Escape'){pfBrandBoxOpen(false)}};
+document.getElementById('pfBrandMenu').onclick=function(e){var btn=e.target.closest('[data-brand-option]');if(!btn)return;setPfBrand(btn.getAttribute('data-brand')||'')};
+document.addEventListener('click',function(e){var box=document.getElementById('pfBrandBox');if(box&&!box.contains(e.target))pfBrandBoxOpen(false)});
 renderCustomerProfile();
 hydrateUi();
 </script></body></html>`;
