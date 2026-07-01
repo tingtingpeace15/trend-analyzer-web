@@ -164,7 +164,7 @@ export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain
               <div className="flex-1 min-w-0">
                 <div className="text-[14px] font-semibold text-ink">新客户偏好分析</div>
                 <div className="mt-0.5 text-[12px] text-ink3 font-mono truncate">
-                  {newHtml.filename} · {formatBytes(newHtml.buffer.byteLength)} · 新版客户偏好看板
+                  {newHtml.filename} · {formatBytes(newHtml.buffer.byteLength)} · 内嵌图表可离线打开
                 </div>
               </div>
               <a
@@ -211,7 +211,7 @@ export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain
           </div>
           <div className="mt-3 text-[11px] text-ink3 font-mono leading-relaxed">
             Excel sheet 数随输入字段而定(缺列自动跳过)·
-            网页报告含 9 个 Tab,图表需联网加载 Chart.js
+            旧版网页需联网加载 Chart.js · 新版看板内嵌 ECharts
           </div>
         </aside>
       </div>

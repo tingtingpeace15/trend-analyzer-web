@@ -798,9 +798,21 @@ function colorSalesBand(qty: number, highQtyCutoff: number, midQtyCutoff: number
 function buildColorPreferenceAnalysis(data: PreferenceData) {
   const colorCol = data.cols.get('颜色');
   const catCol = data.cols.get('分类');
+  const brandCol = data.cols.get('品牌');
   const custCol = data.cols.get('客户名称');
   if (!colorCol) {
-    return { colors: [], category_colors: [], category_structure: [], top_customer_colors: [], monthly_trend: [], months: [], trend_colors: [], has_prior_period_data: false };
+    return {
+      colors: [],
+      category_colors: [],
+      category_structure: [],
+      top_color_category_distribution: [],
+      top_color_brand_distribution: [],
+      top_customer_colors: [],
+      monthly_trend: [],
+      months: [],
+      trend_colors: [],
+      has_prior_period_data: false,
+    };
   }
 
   type MetricGroup = {
@@ -815,6 +827,12 @@ function buildColorPreferenceAnalysis(data: PreferenceData) {
     recent30Qty: number;
     previous30Qty: number;
     months: Map<string, number>;
+  };
+
+  type BreakdownMetric = {
+    qty: number;
+    amount: number;
+    customers: Set<string>;
   };
 
   const newGroup = (color: string, category?: string): MetricGroup => ({
@@ -853,6 +871,8 @@ function buildColorPreferenceAnalysis(data: PreferenceData) {
 
   const colors = new Map<string, MetricGroup>();
   const combos = new Map<string, MetricGroup>();
+  const colorCategoryBreakdowns = new Map<string, Map<string, BreakdownMetric>>();
+  const colorBrandBreakdowns = new Map<string, Map<string, BreakdownMetric>>();
   const categoryTotals = new Map<string, { qty: number; customers: Set<string> }>();
   const customerTotals = new Map<string, { qty: number; amount: number }>();
   const customerColors = new Map<string, Map<string, { qty: number; amount: number }>>();
@@ -876,11 +896,25 @@ function buildColorPreferenceAnalysis(data: PreferenceData) {
     }
   };
 
+  const addBreakdown = (map: Map<string, Map<string, BreakdownMetric>>, color: string, name: string, qty: number, amount: number, customer: string) => {
+    let colorMap = map.get(color);
+    if (!colorMap) {
+      colorMap = new Map<string, BreakdownMetric>();
+      map.set(color, colorMap);
+    }
+    const row = colorMap.get(name) ?? { qty: 0, amount: 0, customers: new Set<string>() };
+    row.qty += qty;
+    row.amount += amount;
+    if (qty > 0) row.customers.add(customer);
+    colorMap.set(name, row);
+  };
+
   for (let i = 0; i < data.rawRowCount; i++) {
     const qty = data.qty[i], amount = data.amt[i];
     if (!Number.isFinite(qty) || !Number.isFinite(amount)) continue;
     const customer = custCol ? cellText(custCol[i]) ?? '未填写客户' : '未填写客户';
     const category = catCol ? cellText(catCol[i]) ?? '未分类' : '未分类';
+    const brand = brandCol ? cellText(brandCol[i]) ?? '未标记品牌' : '未标记品牌';
     const color = normalizeColorName(colorCol[i]);
     const ms = data.orderMs?.[i];
     if (qty > 0) allCustomers.add(customer);
@@ -918,6 +952,8 @@ function buildColorPreferenceAnalysis(data: PreferenceData) {
       combos.set(comboKey, combo);
     }
     addToGroup(combo, qty, amount, customer, category, ms);
+    addBreakdown(colorCategoryBreakdowns, color, category, qty, amount, customer);
+    addBreakdown(colorBrandBreakdowns, color, brand, qty, amount, customer);
 
     let ct = categoryTotals.get(category);
     if (!ct) {
@@ -1080,6 +1116,34 @@ function buildColorPreferenceAnalysis(data: PreferenceData) {
       amount_share: topCustomerAmount ? metric.amount / topCustomerAmount : 0,
     }));
 
+  const topQtyColors = [...colorRows].sort((a, b) => b.qty - a.qty || b.amount - a.amount).slice(0, 10);
+  const buildTopColorBreakdown = (source: Map<string, Map<string, BreakdownMetric>>) => topQtyColors.map((colorRow, index) => {
+    const positiveItems = [...(source.get(colorRow.color)?.entries() ?? [])]
+      .map(([name, metric]) => ({
+        name,
+        qty: Math.round(metric.qty),
+        amount: Math.round(metric.amount),
+        customers: metric.customers.size,
+      }))
+      .filter((r) => hasPositiveNet(r.amount, r.qty))
+      .sort((a, b) => b.qty - a.qty || b.amount - a.amount);
+    const totalQty = positiveItems.reduce((sum, item) => sum + item.qty, 0) || Math.max(0, Number(colorRow.qty) || 0);
+    const totalAmount = positiveItems.reduce((sum, item) => sum + item.amount, 0) || Math.max(0, Number(colorRow.amount) || 0);
+    const rawItems = positiveItems.map((item) => ({
+      ...item,
+      share: totalQty ? item.qty / totalQty : 0,
+    }));
+    return {
+      rank: index + 1,
+      color: colorRow.color,
+      hex: colorRow.hex,
+      total_qty: totalQty,
+      total_amount: totalAmount,
+      customers: colorRow.customers,
+      items: rawItems,
+    };
+  });
+
   return {
     recent_from: hasDates ? previewDateText(recentStart + dayMs) : '',
     recent_to: hasDates ? previewDateText(maxMs) : '',
@@ -1099,6 +1163,8 @@ function buildColorPreferenceAnalysis(data: PreferenceData) {
     colors: colorRows,
     category_colors: comboRows,
     category_structure: categoryStructure,
+    top_color_category_distribution: buildTopColorBreakdown(colorCategoryBreakdowns),
+    top_color_brand_distribution: buildTopColorBreakdown(colorBrandBreakdowns),
     top_customer_colors: topCustomerColorRows,
     months,
     trend_colors: trendColors,
@@ -1457,7 +1523,21 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     amount: number;
     qty: number;
     prices: number[];
+    bandAmounts: Map<string, number>;
+    bandQty: Map<string, number>;
     orderKeys: Set<string>;
+  };
+
+  type ColorBreakdownMetric = {
+    amount: number;
+    qty: number;
+  };
+
+  type ColorBreakdownGroup = {
+    amount: number;
+    qty: number;
+    categories: Map<string, ColorBreakdownMetric>;
+    brands: Map<string, ColorBreakdownMetric>;
   };
 
   type ProfileGroup = {
@@ -1475,6 +1555,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     seasons: Map<string, number>;
     priceValues: number[];
     categoryPrices: Map<string, CategoryPriceGroup>;
+    colorDetails: Map<string, ColorBreakdownGroup>;
   };
 
   type RepeatOrderGroup = {
@@ -1508,10 +1589,36 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
         seasons: new Map(),
         priceValues: [],
         categoryPrices: new Map(),
+        colorDetails: new Map(),
       };
       groups.set(customer, g);
     }
     return g;
+  };
+
+  const addColorBreakdown = (
+    g: ProfileGroup,
+    color: string,
+    category: string | null,
+    brand: string | null,
+    amount: number,
+    qty: number,
+  ) => {
+    let cd = g.colorDetails.get(color);
+    if (!cd) {
+      cd = { amount: 0, qty: 0, categories: new Map(), brands: new Map() };
+      g.colorDetails.set(color, cd);
+    }
+    cd.amount += amount;
+    cd.qty += qty;
+    const addTo = (map: Map<string, ColorBreakdownMetric>, name: string) => {
+      const row = map.get(name) ?? { amount: 0, qty: 0 };
+      row.amount += amount;
+      row.qty += qty;
+      map.set(name, row);
+    };
+    addTo(cd.categories, category || '未分类');
+    addTo(cd.brands, brand || '未标记品牌');
   };
 
   for (let i = 0; i < data.rawRowCount; i++) {
@@ -1538,23 +1645,31 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     const product = productCol ? cellText(productCol[i]) ?? '未标记' : '未标记';
     const brand = brandCol ? cellText(brandCol[i]) : null;
     const designer = designerCol ? cellText(designerCol[i]) : null;
-    const color = colorCol ? cellText(colorCol[i]) : null;
+    const color = colorCol ? normalizeColorName(colorCol[i]) : null;
     const size = sizeCol ? cellText(sizeCol[i]) : null;
     if (category) {
       addNumber(g.categories, category, amount);
       let cp = g.categoryPrices.get(category);
       if (!cp) {
-        cp = { amount: 0, qty: 0, prices: [], orderKeys: new Set() };
+        cp = { amount: 0, qty: 0, prices: [], bandAmounts: new Map(), bandQty: new Map(), orderKeys: new Set() };
         g.categoryPrices.set(category, cp);
       }
       cp.amount += amount;
       cp.qty += qty;
-      if (hasEffectivePrice) cp.prices.push(price);
+      if (hasEffectivePrice) {
+        const band = priceBand(price);
+        cp.prices.push(price);
+        addNumber(cp.bandAmounts, band, amount);
+        addNumber(cp.bandQty, band, qty);
+      }
       cp.orderKeys.add(key);
     }
     if (brand) addNumber(g.brands, brand, amount);
     if (designer) addNumber(g.designers, designer, amount);
-    if (color) addNumber(g.colors, color, qty);
+    if (color) {
+      addNumber(g.colors, color, qty);
+      if (isPositiveSale(amount, qty)) addColorBreakdown(g, color, category, brand, amount, qty);
+    }
     if (size) addNumber(g.sizes, size, qty);
 
     if (isPositiveSale(amount, qty)) {
@@ -1729,6 +1844,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
           const useQuantileRange = sortedPrices.length >= 3 && percentile(sortedPrices, 0.25) !== percentile(sortedPrices, 0.75);
           const low = useQuantileRange ? percentile(sortedPrices, 0.25) : avg * 0.85;
           const high = useQuantileRange ? percentile(sortedPrices, 0.75) : avg * 1.15;
+          const bandAmountTotal = PRICE_BANDS.reduce((sum, b) => sum + (cp.bandAmounts.get(b.label) ?? 0), 0);
           return {
             name,
             amount: Math.round(cp.amount),
@@ -1737,11 +1853,47 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
             avg: round1(avg),
             low: Math.max(0, round1(low)),
             high: Math.max(0, round1(high)),
+            price_bands: PRICE_BANDS.map((b) => ({
+              name: b.label,
+              value: Math.round(cp.bandAmounts.get(b.label) ?? 0),
+              qty: Math.round(cp.bandQty.get(b.label) ?? 0),
+              share: bandAmountTotal ? (cp.bandAmounts.get(b.label) ?? 0) / bandAmountTotal : 0,
+            })).filter((r) => r.value > 0 || r.qty > 0),
           };
         })
         .filter((r) => hasPositiveNet(r.amount, r.qty))
         .sort((a, b) => b.amount - a.amount);
       const repeat = buildRepeatAnalysis(g.customer);
+      const colorDetails = [...g.colorDetails.entries()]
+        .map(([color, cd]) => {
+          const toRows = (map: Map<string, ColorBreakdownMetric>, totalQty: number) => [...map.entries()]
+            .map(([name, metric]) => {
+              const qty = Math.round(metric.qty);
+              return {
+                name,
+                qty,
+                amount: Math.round(metric.amount),
+                share: totalQty ? qty / totalQty : 0,
+              };
+            })
+            .filter((r) => r.qty > 0)
+            .sort((a, b) => b.qty - a.qty || b.amount - a.amount)
+            .slice(0, 8);
+          const categoryQty = [...cd.categories.values()].reduce((sum, metric) => sum + Math.max(0, Math.round(metric.qty)), 0);
+          const brandQty = [...cd.brands.values()].reduce((sum, metric) => sum + Math.max(0, Math.round(metric.qty)), 0);
+          const qty = Math.max(categoryQty, brandQty, Math.round(cd.qty));
+          return {
+            color,
+            hex: colorHex(color),
+            qty,
+            amount: Math.round(cd.amount),
+            categories: toRows(cd.categories, categoryQty || qty),
+            brands: toRows(cd.brands, brandQty || qty),
+          };
+        })
+        .filter((r) => r.qty > 0)
+        .sort((a, b) => b.qty - a.qty || b.amount - a.amount)
+        .slice(0, 15);
       return {
         customer: g.customer,
         amount,
@@ -1763,6 +1915,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
         brands,
         designers,
         colors,
+        color_details: colorDetails,
         sizes,
         category_prices: categoryPrices,
         price_bands: PRICE_BANDS.map((b) => ({ name: b.label, value: Math.round(g.priceBands.get(b.label) ?? 0) })).filter((r) => r.value > 0),
@@ -2506,10 +2659,6 @@ function buildPreferenceContentHtml(R: unknown): string {
 <html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>新客户偏好分析</title>
 <script>${INLINE_ECHARTS_SCRIPT}</script>
-<link rel="stylesheet" href="https://unpkg.com/tippy.js@6/dist/tippy.css">
-<script src="https://unpkg.com/@popperjs/core@2"></script>
-<script src="https://unpkg.com/tippy.js@6"></script>
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,'Microsoft YaHei','Segoe UI',sans-serif;background:#f3f7ff;color:#10205f;font-size:14px}
@@ -2682,9 +2831,12 @@ body{background:var(--bg);color:var(--ink);font-size:13px;letter-spacing:0}
 .card-title{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
 .card-title span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-title .lucide{width:16px;height:16px;color:var(--accent);stroke-width:2.1}
-.help-btn{width:24px;height:24px;border:1px solid var(--line);border-radius:50%;background:#fff;color:#7a8292;display:inline-flex;align-items:center;justify-content:center;cursor:help;flex:0 0 24px;transition:.15s}
+.help-btn{width:24px;height:24px;border:1px solid var(--line);border-radius:50%;background:#fff;color:#7a8292;display:inline-flex;align-items:center;justify-content:center;cursor:help;flex:0 0 24px;transition:.15s;position:relative}
 .help-btn:hover{border-color:#b7ccff;color:var(--accent);background:#f2f7ff}
 .help-btn .lucide{width:14px;height:14px;stroke-width:2}
+.help-btn:focus-visible{outline:2px solid rgba(21,92,255,.35);outline-offset:2px}
+.help-btn:hover:after,.help-btn:focus-visible:after{content:attr(data-tip);position:absolute;right:0;top:calc(100% + 8px);width:260px;background:#10205f;color:#fff;border-radius:8px;box-shadow:0 12px 28px rgba(16,32,95,.22);font-size:12px;font-weight:500;line-height:1.55;text-align:left;padding:8px 10px;z-index:300;white-space:normal}
+.help-btn:hover:before,.help-btn:focus-visible:before{content:"";position:absolute;right:8px;top:calc(100% + 2px);border:6px solid transparent;border-bottom-color:#10205f;z-index:301}
 .ch{height:360px}.ch.tall{height:500px}
 .ch.large{height:460px}
 .ch.wide{height:620px}
@@ -2723,12 +2875,6 @@ tr:hover td{background:#f8fafc}
 .range-dot{background:var(--accent-2)}
 .tag{border-radius:999px;font-weight:700}
 .echart canvas{filter:saturate(.95)}
-.tippy-box[data-theme~='trend']{background:#10205f;color:#fff;border-radius:8px;box-shadow:0 12px 28px rgba(16,32,95,.22);font-size:12px;line-height:1.55}
-.tippy-box[data-theme~='trend'] .tippy-content{padding:8px 10px}
-.tippy-box[data-theme~='trend'][data-placement^='top']>.tippy-arrow:before{border-top-color:#10205f}
-.tippy-box[data-theme~='trend'][data-placement^='bottom']>.tippy-arrow:before{border-bottom-color:#10205f}
-.tippy-box[data-theme~='trend'][data-placement^='left']>.tippy-arrow:before{border-left-color:#10205f}
-.tippy-box[data-theme~='trend'][data-placement^='right']>.tippy-arrow:before{border-right-color:#10205f}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-track{background:#f1f3f6;border-radius:999px}
 ::-webkit-scrollbar-thumb{background:#c7ceda;border-radius:999px;border:2px solid #f1f3f6}
@@ -2755,7 +2901,7 @@ function esc(v){return String(v==null?'-':v).replace(/[&<>"']/g,function(m){retu
 function axisTickFormatter(sc){return sc&&sc.ticks&&sc.ticks.callback?function(v){return sc.ticks.callback(v)}:undefined}
 function legendOpt(cfg){var l=cfg.options&&cfg.options.plugins&&cfg.options.plugins.legend||{};if(l.display===false)return {show:false};if(l.position==='right')return {show:true,type:'scroll',orient:'vertical',right:0,top:36,bottom:12,itemWidth:20,itemHeight:8,textStyle:{color:'#687083',fontSize:11}};return {show:true,type:'scroll',bottom:0,left:'center',itemWidth:20,itemHeight:8,textStyle:{color:'#687083',fontSize:11}}}
 function tooltipHtml(params,cfg){var ps=Array.isArray(params)?params:[params], cb=cfg.options&&cfg.options.plugins&&cfg.options.plugins.tooltip&&cfg.options.plugins.tooltip.callbacks||{}, labels=cfg.data.labels||[], dsets=cfg.data.datasets||[];var title=ps[0]&&ps[0].name!=null?ps[0].name:'';var html='<div style="font-weight:700;margin-bottom:6px;color:#fff">'+esc(title)+'</div>';var fake=[];ps.forEach(function(p){var ds=dsets[p.seriesIndex]||dsets[0]||{}, raw=Array.isArray(p.value)?p.value[p.value.length-1]:p.value, f={dataset:ds,datasetIndex:p.seriesIndex,dataIndex:p.dataIndex,raw:raw,label:labels[p.dataIndex]||p.name};fake.push(f);var txt=cb.label?cb.label(f):(p.seriesName?esc(p.seriesName)+': ':'')+(String(p.seriesName||'').includes('金额')||String(p.seriesName||'').includes('销售额')?money(raw):fmt(raw));if(Array.isArray(txt))txt=txt.join('<br>');html+='<div style="display:flex;align-items:center;gap:6px;line-height:1.7"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+p.color+'"></span><span>'+esc(txt)+'</span></div>'});if(cb.afterBody){var extra=cb.afterBody(fake);if(extra){if(!Array.isArray(extra))extra=[extra];html+='<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.16);color:rgba(255,255,255,.82);line-height:1.6">'+extra.map(esc).join('<br>')+'</div>'}}return html}
-function toEcharts(cfg){var type=cfg.type, labels=cfg.data.labels||[], dsets=cfg.data.datasets||[], opt=cfg.options||{}, plugins=opt.plugins||{}, tipOpt=plugins.tooltip||{}, isH=opt.indexAxis==='y', isPie=type==='pie'||type==='doughnut';var base={color:C,animationDuration:650,animationEasing:'cubicOut',tooltip:{trigger:tipOpt.trigger||(isPie?'item':'axis'),axisPointer:{type:type==='bar'?'shadow':'line'},backgroundColor:'rgba(16,32,95,.96)',borderWidth:0,padding:[9,11],textStyle:{color:'#fff',fontSize:12},formatter:function(p){return tooltipHtml(p,cfg)}},legend:legendOpt(cfg)};if(isPie){var ds=dsets[0]||{};return Object.assign(base,{series:[{name:ds.label||'',type:'pie',radius:type==='doughnut'?['48%','72%']:'70%',center:(plugins.legend&&plugins.legend.position)==='right'?['40%','50%']:['50%','48%'],avoidLabelOverlap:true,itemStyle:{borderColor:'#fff',borderWidth:2},label:{color:'#5f6675',fontSize:11},data:labels.map(function(l,i){return {name:l,value:(ds.data||[])[i],itemStyle:{color:Array.isArray(ds.backgroundColor)?ds.backgroundColor[i]:ds.backgroundColor}}})}]})}
+function toEcharts(cfg){var type=cfg.type, labels=cfg.data.labels||[], dsets=cfg.data.datasets||[], opt=cfg.options||{}, plugins=opt.plugins||{}, tipOpt=plugins.tooltip||{}, isH=opt.indexAxis==='y', isPie=type==='pie'||type==='doughnut';var base={color:C,animationDuration:650,animationEasing:'cubicOut',tooltip:{trigger:tipOpt.trigger||(isPie?'item':'axis'),axisPointer:{type:type==='bar'?'shadow':'line'},backgroundColor:'rgba(16,32,95,.96)',borderWidth:0,padding:[9,11],textStyle:{color:'#fff',fontSize:12},formatter:tipOpt.formatter||function(p){return tooltipHtml(p,cfg)}} ,legend:legendOpt(cfg)};if(isPie){var ds=dsets[0]||{};return Object.assign(base,{series:[{name:ds.label||'',type:'pie',radius:type==='doughnut'?['48%','72%']:'70%',center:(plugins.legend&&plugins.legend.position)==='right'?['40%','50%']:['50%','48%'],avoidLabelOverlap:true,itemStyle:{borderColor:'#fff',borderWidth:2},label:{color:'#5f6675',fontSize:11},data:labels.map(function(l,i){return {name:l,value:(ds.data||[])[i],itemStyle:{color:Array.isArray(ds.backgroundColor)?ds.backgroundColor[i]:ds.backgroundColor}}})}]})}
 var scales=opt.scales||{}, hasRight=dsets.some(function(ds){return ds.yAxisID==='y1'}), hasTop=dsets.some(function(ds){return ds.xAxisID==='x1'}), legendHidden=plugins.legend&&plugins.legend.display===false, grid=Object.assign({left:isH?64:hasRight?72:58,right:(isH&&hasTop)||(!isH&&hasRight)?100:36,top:hasTop||hasRight?54:28,bottom:legendHidden?44:70,containLabel:true},opt.grid||{});
 function axisStyle(sc,name,pos){var isX=name==='x'||name==='x1';return {type:'value',position:pos,name:sc&&sc.title&&sc.title.display?sc.title.text:'',nameLocation:'middle',nameGap:isX?30:64,nameRotate:isX?0:(pos==='right'?-90:90),nameTextStyle:{color:'#687083',fontSize:11,padding:[0,0,0,0],align:'center'},min:sc&&sc.min!=null?sc.min:null,max:sc&&sc.max!=null?sc.max:null,axisLine:{show:false},axisTick:{show:false},axisLabel:{color:'#687083',fontSize:11,formatter:axisTickFormatter(sc)},splitLine:{lineStyle:{color:'rgba(16,32,95,.09)'}}}}
 var xAxis,yAxis,series;
@@ -2770,12 +2916,32 @@ function resizeCharts(){Object.keys(CFG).forEach(function(k){try{if(!CH[k])drawC
 function fallbackChart(id,cfg){var e=document.getElementById(id);if(!e)return;var labels=(cfg.data&&cfg.data.labels)||[],ds=(cfg.data&&cfg.data.datasets&&cfg.data.datasets[0])||{},data=ds.data||[],max=Math.max.apply(null,data.map(n).concat([1]));var rows=labels.map(function(label,i){var val=n(data[i]),w=Math.max(1,Math.min(100,val/max*100));var color=Array.isArray(ds.backgroundColor)?ds.backgroundColor[i]:(ds.backgroundColor||P.amount);return '<div class="fallback-row" title="'+esc(label)+'"><b>'+esc(label)+'</b><div class="fallback-track"><i style="width:'+w+'%;background:'+color+'"></i></div><span>'+((ds.label||'').indexOf('金额')>=0?money(val):fmt(val))+'</span></div>'}).join('');e.innerHTML='<div class="fallback-chart">'+(rows||'<div class="fallback-note">当前图表暂无可展示数据。</div>')+'</div>'}
 function mk(id,cfg){CFG[id]=cfg;delete OPT[id];var e=document.getElementById(id);if(!e)return null;if(CH[id]){CH[id].dispose();delete CH[id]}if(!window.echarts){fallbackChart(id,cfg);return null}var chart=drawCfg(id,cfg);setTimeout(resizeCharts,30);return chart}
 function mkOption(id,option,fallback){OPT[id]={option:option,fallback:fallback};delete CFG[id];var e=document.getElementById(id);if(!e)return null;if(CH[id]){CH[id].dispose();delete CH[id]}if(!window.echarts){if(fallback)fallback();return null}var chart=drawOpt(id,OPT[id]);setTimeout(resizeCharts,30);return chart}
-function hydrateUi(){if(window.lucide)lucide.createIcons();if(window.tippy){tippy('[data-tippy-content]',{theme:'trend',arrow:true,delay:[120,40],maxWidth:280,allowHTML:true})}}
+function iconSvg(name){var icons={
+'badge-dollar-sign':'<path d="M7 3h10l3 3v12l-3 3H7l-3-3V6z"/><path d="M12 7v10"/><path d="M9.5 9.5c.8-.7 4.2-.8 5 .4.7 1-.2 2-2.6 2.1-2.4.1-3.3 1.1-2.5 2.1.9 1.2 4.2 1.1 5.1.3"/>',
+'package-check':'<path d="M21 8l-9-5-9 5 9 5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/><path d="M16 15l2 2 4-4"/>',
+'users':'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/>',
+'receipt':'<path d="M5 3v18l2-1 2 1 2-1 2 1 2-1 2 1 2-1V3z"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/>',
+'badge':'<path d="M7 3h10l4 4v10l-4 4H7l-4-4V7z"/><path d="M8 12h8"/><path d="M9 16h6"/>',
+'layout-dashboard':'<rect x="3" y="3" width="7" height="8" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/>',
+'layers-3':'<path d="M12 2l9 5-9 5-9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/>',
+'palette':'<path d="M12 3a9 9 0 0 0 0 18h1.5a2.5 2.5 0 0 0 0-5H12a1.5 1.5 0 0 1 0-3h1a8 8 0 0 0 8-8 2 2 0 0 0-2-2z"/><circle cx="7.5" cy="10" r="1"/><circle cx="10" cy="6.5" r="1"/><circle cx="14" cy="6.5" r="1"/><circle cx="16.5" cy="10" r="1"/>',
+'ruler':'<path d="M3 17l14-14 4 4L7 21z"/><path d="M14 6l2 2"/><path d="M11 9l2 2"/><path d="M8 12l2 2"/><path d="M5 15l2 2"/>',
+'calendar-range':'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="M7 14h4"/><path d="M13 17h4"/>',
+'user-round-search':'<circle cx="10" cy="8" r="4"/><path d="M2 21a8 8 0 0 1 12-7"/><circle cx="17" cy="17" r="3"/><path d="M21 21l-2-2"/>',
+'book-open':'<path d="M2 4h7a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-7a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h8z"/>',
+'store':'<path d="M4 10h16l-1-6H5z"/><path d="M5 10v10h14V10"/><path d="M8 20v-6h4v6"/><path d="M15 14h2"/>',
+'line-chart':'<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-7"/>',
+'bar-chart-3':'<path d="M3 3v18h18"/><path d="M7 16V9"/><path d="M12 16V5"/><path d="M17 16v-3"/>',
+'sparkles':'<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/><path d="M19 14l.8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8z"/><path d="M5 15l.8 2.2L8 18l-2.2.8L5 21l-.8-2.2L2 18l2.2-.8z"/>',
+'info':'<circle cx="12" cy="12" r="9"/><path d="M12 10v6"/><path d="M12 7h.01"/>',
+'chart-no-axes-combined':'<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-4"/><path d="M12 16V8"/><path d="M16 16v-6"/><path d="M8 8l4-3 4 4 4-6"/>'
+};var body=icons[name]||icons['chart-no-axes-combined'];return '<svg class="lucide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+body+'</svg>'}
+function hydrateUi(){document.querySelectorAll('[data-lucide]').forEach(function(el){var name=el.getAttribute('data-lucide')||'chart-no-axes-combined';el.innerHTML=iconSvg(name)})}
 function sum(a,k){return a.reduce(function(x,r){return x+n(r[k])},0)}
 function topRows(a,cnt,k){return a.slice().sort(function(x,y){return n(y[k])-n(x[k])}).slice(0,cnt)}
 function iconForTitle(t){if(t.indexOf('字段')>=0||t.indexOf('计算说明')>=0)return 'book-open';if(t.indexOf('客户')>=0)return 'users';if(t.indexOf('颜色')>=0)return 'palette';if(t.indexOf('尺码')>=0||t.indexOf('码数')>=0)return 'ruler';if(t.indexOf('年份')>=0||t.indexOf('季节')>=0||t.indexOf('订货会')>=0)return 'calendar-range';if(t.indexOf('品牌')>=0||t.indexOf('设计师')>=0)return 'badge';if(t.indexOf('价格')>=0||t.indexOf('价位')>=0)return 'badge-dollar-sign';if(t.indexOf('店铺')>=0)return 'store';if(t.indexOf('趋势')>=0||t.indexOf('月度')>=0)return 'line-chart';if(t.indexOf('销量')>=0||t.indexOf('金额')>=0)return 'bar-chart-3';if(t.indexOf('推荐')>=0||t.indexOf('建议')>=0)return 'sparkles';return 'chart-no-axes-combined'}
 function helpForTitle(t){if(t.indexOf('走势')>=0||t.indexOf('趋势')>=0)return '看当前报表时间段内的变化方向，不做跨报表或自然月强行环比。';if(t.indexOf('Top20客户')>=0)return '先按客户净销售金额筛出Top20客户，再汇总这些客户所有订单，不展示客户名称。';if(t.indexOf('年份')>=0||t.indexOf('季节')>=0||t.indexOf('订货会')>=0)return '年份字段包含“订货会”的记录归为订货会成交，其余归为普通款期成交。客户不拆分，只拆成交记录。';if(t.indexOf('品类 - 设计师品牌贡献值Top1')>=0)return '每个品类只展示贡献金额最高的设计师品牌，用于判断该品类主要由哪个设计师品牌创造销售价值。';if(t.indexOf('品牌 - 设计师贡献金额')>=0)return '按品牌分组展示设计师贡献金额，条形越长说明该设计师在该品牌下创造的成交金额越高。';if(t.indexOf('Top1')>=0)return '每个分组只展示销量或金额最高的第一项，用于快速判断主推方向。';if(t.indexOf('备货优先级')>=0)return '综合销量、客户覆盖、近期增长和稳定性生成，用于判断多备、常备或控量。';if(t.indexOf('价格')>=0||t.indexOf('价位')>=0)return '金额使用净销售金额，数量使用净销售量，单价按成交金额除以成交数量计算。';if(t.indexOf('客户覆盖')>=0)return '客户数按当前报表内发生过拿货的客户去重统计。';if(t.indexOf('颜色')>=0)return '颜色按源表颜色名称统计，空值归为未标记，图案类单独归类。';if(t.indexOf('尺码')>=0||t.indexOf('码数')>=0)return '尺码展示全部尺码，不因销量低而隐藏。';return '鼠标悬停图表可查看成交金额、数量、客户覆盖等明细。'}
-function card(t,b,full){return '<div class="c'+(full?' full':'')+'"><h3><span class="card-title"><i data-lucide="'+iconForTitle(t)+'"></i><span>'+esc(t)+'</span></span><button class="help-btn" data-tippy-content="'+esc(helpForTitle(t))+'" aria-label="图表说明"><i data-lucide="info"></i></button></h3>'+b+'</div>'}
+function card(t,b,full){var help=helpForTitle(t);return '<div class="c'+(full?' full':'')+'"><h3><span class="card-title"><i data-lucide="'+iconForTitle(t)+'"></i><span>'+esc(t)+'</span></span><button class="help-btn" data-tip="'+esc(help)+'" aria-label="图表说明：'+esc(help)+'"><i data-lucide="info"></i></button></h3>'+b+'</div>'}
 function chart(id,tall){return '<div class="ch'+(tall?' tall':'')+'"><div id="'+id+'" class="echart"></div></div>'}
 function largeChart(id){return '<div class="ch large"><div id="'+id+'" class="echart"></div></div>'}
 function wideChart(id){return '<div class="ch wide"><div id="'+id+'" class="echart"></div></div>'}
@@ -2802,7 +2968,7 @@ function categoryCoverageNote(){return '<div class="cat-note"><span><b>绿条</b
 function categoryTrendNote(){var ca=catData();return '<div class="cat-note"><span>只使用当前报表时间段内的数据。</span><span>当前按<b>'+esc(ca.trend_period_type||'-')+'</b>汇总，不做自然月环比或跨报表对比。</span><span>趋势图展示成交金额 Top10 主力品类，避免全部品类堆叠后无法阅读。</span></div>'}
 function trendAmountMap(){var m={};(catData().category_trend||[]).forEach(function(r){m[r.category+'|'+r.period]=r});return m}
 function categoryAdviceBoard(){var rows=positiveRows(catData().categories||[],['qty','amount','customers']).slice().sort(function(a,b){return n(b.recommend_score)-n(a.recommend_score)});var groups=[{name:'主推备货',desc:'作为日常主推入口，保证主销款深度，并用于带动搭配销售。',color:P.qty},{name:'连带搭配',desc:'覆盖客户多，适合做进店搭配和加购推荐，提高连带件数。',color:P.coverage},{name:'定向推荐',desc:'优先推荐给高贡献客户，备货不要铺太散，适合做定向补货。',color:P.trend},{name:'测款放量',desc:'报表期内走势上升，可保留动销款并小幅增加相近款测试。',color:'#00a6ff'},{name:'控量测试',desc:'少量陈列，优先选择卖点清晰、退换风险低的款。',color:P.muted}];return '<div class="cat-advice">'+groups.map(function(g){var items=rows.filter(function(r){return (r.sale_focus||'控量测试')===g.name});var list=items.length?items.map(function(r){var w=Math.max(0,Math.min(100,n(r.recommend_score)));return '<div class="cat-line" title="'+esc(r.category+'：推荐分 '+r.recommend_score+'；客户覆盖 '+fmt(r.customers)+'人；所有客户占比 '+pct(r.customer_share,1)+'；常搭 '+(r.companion||'-'))+'"><b>'+esc(r.category)+'</b><span>'+pct(r.customer_share,1)+'</span><em>'+esc(r.companion&&r.companion!=='-'?'搭 '+r.companion:'无常搭')+'</em><div class="cat-mini-bar"><i style="width:'+w+'%;background:'+g.color+'"></i></div></div>'}).join(''):'<div class="cat-empty">当前无品类归入此类</div>';return '<div class="cat-group"><div class="cat-group-head"><div class="cat-group-title"><i style="background:'+g.color+'"></i>'+esc(g.name)+'</div><span class="cat-group-count">'+items.length+'个品类</span></div><div class="cat-group-desc">'+esc(g.desc)+'</div><div class="cat-list">'+list+'</div></div>'}).join('')+'</div>'}
-function colorData(){return D.color_preference_analysis||{colors:[],category_colors:[],category_structure:[],top_customer_colors:[],monthly_trend:[],months:[],trend_colors:[],has_prior_period_data:false}}
+function colorData(){return D.color_preference_analysis||{colors:[],category_colors:[],category_structure:[],top_color_category_distribution:[],top_color_brand_distribution:[],top_customer_colors:[],monthly_trend:[],months:[],trend_colors:[],has_prior_period_data:false}}
 function stockTagColor(v){return v==='重点备货'?P.qty:v==='常规备货'?'#00a6ff':v==='趋势加量'?P.amount:v==='少量试水'?P.trend:P.muted}
 function stockGroupColor(v){return v==='稳定常备色'?P.qty:v==='近期趋势色'?P.amount:P.muted}
 function stockGroupLegend(){var co=colorData(),cuts=co.color_cutoffs||{},high=cuts.high_qty?fmt(cuts.high_qty):'-',mid=cuts.mid_qty?fmt(cuts.mid_qty):'-',growth=cuts.trend_growth_rate||20;return '<div class="legend cat-legend"><span><i style="background:'+stockGroupColor('稳定常备色')+'"></i>稳定常备色：销量 ≥ '+high+'件，建议多备</span><span><i style="background:'+stockGroupColor('近期趋势色')+'"></i>近期趋势色：销量 ≥ '+mid+'件，近30天较前30天增长 ≥ '+growth+'%，可加量</span><span><i style="background:'+stockGroupColor('控制备货色')+'"></i>控制备货色：未进入主力销量区或近期未走高，少量备货</span></div>'}
@@ -2812,6 +2978,10 @@ function colorStructureRows(){var rows=[];(colorData().category_structure||[]).f
 function colorRankColor(rank){return n(rank)===1?P.qty:n(rank)===2?P.amount:'#00a6ff'}
 function colorStructureTooltipRow(r){return ['品类 '+esc(r.category||'-'),'颜色 '+esc(r.color||'-'),'排名 Top'+(r.rank||'-'),'净销售量 '+fmt(r.qty)+'件','品类内占比 '+pct(r.share,1)]}
 function customerColorTooltip(r){return ['颜色 '+esc(r.color||'-'),'排名 Top'+(r.rank||'-'),'净销售量 '+fmt(r.qty)+'件','净销售金额 '+money(r.amount),'覆盖销售额Top20客户 '+fmt(r.customers)+'人','销售额Top20客户内销量占比 '+pct(r.qty_share,1),'销售额Top20客户内金额占比 '+pct(r.amount_share,1)]}
+function colorBreakdownPalette(i){var cs=['#155cff','#12b76a','#ff8a00','#6d4aff','#00a6ff','#10205f','#22c55e','#a855f7','#f59e0b','#64748b','#ec4899','#14b8a6'];return cs[i%cs.length]}
+function colorBreakdownData(rawRows,limit){var rows=(rawRows||[]).filter(function(r){return n(r.total_qty)>0}).slice(0,10),totals={};rows.forEach(function(r){(r.items||[]).forEach(function(it){if(n(it.qty)>0)totals[it.name]=n(totals[it.name])+n(it.qty)})});var ordered=Object.keys(totals).sort(function(a,b){return n(totals[b])-n(totals[a])});var main=ordered.slice(0,limit||8),hasOther=ordered.length>main.length,names=hasOther?main.concat(['其他']):main;var mapped=rows.map(function(r){var by={},other={name:'其他',qty:0,amount:0,customers:0,share:0};(r.items||[]).forEach(function(it){if(main.indexOf(it.name)>=0)by[it.name]=it;else{other.qty+=n(it.qty);other.amount+=n(it.amount);other.customers+=n(it.customers)}});if(hasOther&&other.qty>0){other.share=n(r.total_qty)?other.qty/n(r.total_qty):0;by['其他']=other}return Object.assign({},r,{items:names.map(function(name){return Object.assign({name:name,qty:0,amount:0,customers:0,share:0},by[name]||{})})})});return {rows:mapped,names:names}}
+function colorBreakdownItem(row,name){return (row.items||[]).find(function(x){return x.name===name})||{}}
+function renderColorBreakdownChart(id,rawRows){var d=colorBreakdownData(rawRows,8),rows=d.rows,names=d.names;if(!rows.length||!names.length){mk(id,{type:'bar',data:{labels:[],datasets:[]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});return}mk(id,{type:'bar',data:{labels:rows.map(function(r){return r.color}),datasets:names.map(function(name,i){return {label:name,itemName:name,data:rows.map(function(r){return n(colorBreakdownItem(r,name).qty)}),backgroundColor:colorBreakdownPalette(i),stack:'color',barMaxWidth:28}})},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',grid:{left:74,right:46,top:44,bottom:86},plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:function(c){var row=rows[c.dataIndex]||{},item=colorBreakdownItem(row,c.dataset.itemName);return c.dataset.label+': '+fmt(c.raw)+'件 / 占该颜色 '+pct(c.raw,row.total_qty)+' / '+money(item.amount)},afterBody:function(ctx){var row=rows[ctx[0].dataIndex]||{};return ['颜色总销量 '+fmt(row.total_qty)+'件','颜色总金额 '+money(row.total_amount),'客户数 '+fmt(row.customers)+'人']}}}},scales:{x:{title:{display:true,text:'净销售量'},ticks:{callback:function(v){return fmt(v)}}},y:{ticks:{autoSkip:false,font:{size:11}}}}}})}
 function sizeData(){return D.size_preference_analysis||{sizes:[],category_sizes:[],category_structure:[],top_customer_sizes:[],monthly_trend:[],months:[],trend_sizes:[],size_cutoffs:{},has_recent30_period_data:false}}
 function sizeGroupColor(v){return v==='稳定常备码'?P.qty:v==='近期趋势码'?P.amount:P.muted}
 function sizeStockGroupLegend(){var sp=sizeData(),cuts=sp.size_cutoffs||{},high=cuts.high_qty?fmt(cuts.high_qty):'-',mid=cuts.mid_qty?fmt(cuts.mid_qty):'-',growth=cuts.trend_growth_rate||20;return '<div class="legend cat-legend"><span><i style="background:'+sizeGroupColor('稳定常备码')+'"></i>稳定常备码：销量 ≥ '+high+'件，建议作为主备尺码</span><span><i style="background:'+sizeGroupColor('近期趋势码')+'"></i>近期趋势码：销量 ≥ '+mid+'件，近30天较前30天增长 ≥ '+growth+'%，可适当加量</span><span><i style="background:'+sizeGroupColor('控制备货码')+'"></i>控制备货码：未进入主力销量区或近期未走高，控制备货深度</span></div>'}
@@ -2928,9 +3098,12 @@ function pfNames(rows,cnt){return valueRows(rows||[]).slice(0,cnt).map(function(
 function pfRecommendation(p){var cats=pfNames(p.categories,3),colors=pfNames(p.colors,3),sizes=pfNames(p.sizes,1),brands=pfNames(p.brands,2),designers=pfNames(p.designers,1),r=p.repeat||{},hasRepeat=!!r.has_repeat;function chips(arr){return (arr.length?arr:['暂无']).map(function(x){return '<span>'+esc(x)+'</span>'}).join('')}var priceType=(p.price_type||'待判断')+' · '+(p.main_price_segment||'-')+' '+(p.price_type_share||0)+'%',repeatText=hasRepeat?'会重复拿同一商品':'暂无明显复拿',intervalText=(r.avg_interval_days||0)?(r.avg_interval_days+'天'):'-';document.getElementById('pfRecommend').innerHTML='<b class="pf-rec-title">客户推荐画像</b><div class="pf-rec-row"><b>客户类型</b><div><span title="'+esc(p.price_type_desc||'')+'">'+esc(priceType)+'</span></div></div><div class="pf-rec-row"><b>推荐品类</b><div>'+chips(cats)+'</div></div><div class="pf-rec-row"><b>推荐颜色</b><div>'+chips(colors)+'</div></div><div class="pf-rec-row"><b>推荐尺码</b><div>'+chips(sizes)+'</div></div><div class="pf-rec-row"><b>常买价位</b><div><span>¥'+p.price_low+'-'+p.price_high+'</span></div></div><div class="pf-rec-row"><b>主品牌</b><div>'+chips(brands)+'</div></div><div class="pf-rec-row"><b>设计师品牌</b><div>'+chips(designers)+'</div></div><div class="pf-rec-row"><b>复拿情况</b><div><span title="同一货号出现2笔及以上正向拿货订单才算复拿，不含退货">'+esc(repeatText)+' · '+fmt(r.repeat_product_count||0)+'个货号</span></div></div><div class="pf-rec-row"><b>平均补货间隔</b><div><span>'+esc(intervalText)+'</span></div></div>'}
 function pfRepeatProductTooltip(row){return ['货号 '+esc(row.product||'-'),'品类 '+esc(row.category||'-'),'复拿金额 '+money(row.repeat_amount),'复拿数量 '+fmt(row.repeat_qty)+'件','复拿次数 '+fmt(row.repeat_count)+'次','首次 '+esc(row.first_date||'-')+' / 最近 '+esc(row.last_date||'-'),'平均间隔 '+(row.avg_interval_days||0)+'天']}
 function renderPfRepeatCharts(p){var rep=p.repeat||{},products=(rep.products||[]).filter(function(r){return n(r.repeat_qty)>0||n(r.repeat_amount)>0}).slice(0,15);mk('pfRepeatProducts',{type:'bar',data:{labels:products.map(function(r){return r.product}),datasets:[{label:'复拿数量',data:products.map(function(r){return r.repeat_qty}),backgroundColor:P.qty,xAxisID:'x',barMaxWidth:22},{label:'复拿金额',data:products.map(function(r){return r.repeat_amount}),backgroundColor:P.amount,xAxisID:'x1',barMaxWidth:22}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',grid:{left:112,right:124,top:62,bottom:78},plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:function(c){return c.dataset.xAxisID==='x1'?'复拿金额: '+money(c.raw):'复拿数量: '+fmt(c.raw)+'件'},afterBody:function(ctx){return pfRepeatProductTooltip(products[ctx[0].dataIndex]||{})}}}},scales:{x:{position:'bottom',title:{display:true,text:'复拿数量'},ticks:{callback:function(v){return fmt(v)}}},x1:{position:'top',grid:{drawOnChartArea:false},title:{display:true,text:'复拿金额'},ticks:{callback:function(v){return money(v)}}},y:{ticks:{autoSkip:false,font:{size:10}}}}}})}
-function pfColorPie(p){var rows=valueRows(p.colors||[]).slice().sort(function(a,b){return n(b.value)-n(a.value)}).slice(0,15);mk('pfColorPie',{type:'pie',data:{labels:rows.map(function(r){return r.name}),datasets:[{label:'拿货数量',data:rows.map(function(r){return r.value}),backgroundColor:rows.map(function(r,i){return r.hex||C[i%C.length]}),borderColor:'#fff',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){var total=c.dataset.data.reduce(function(a,b){return a+n(b)},0);return c.label+': '+fmt(c.raw)+'件 ('+pct(c.raw,total)+')'}}}}}})}
+function pfColorPieTooltip(p,row,total){var d=(p.color_details||[]).find(function(x){return x.color===row.name})||{};function lines(title,items){items=(items||[]).filter(function(x){return n(x.qty)>0}).slice(0,5);if(!items.length)return '';return '<div style="margin-top:8px;padding-top:7px;border-top:1px solid rgba(255,255,255,.16)"><div style="font-weight:700;margin-bottom:4px">'+title+'</div>'+items.map(function(x){var share=n(x.share);return '<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.65"><span>'+esc(x.name)+'</span><span>'+fmt(x.qty)+'件 / '+(share*100).toFixed(1)+'%</span></div>'}).join('')+'</div>'}return '<div style="font-weight:800;margin-bottom:6px">'+esc(row.name)+'</div><div style="line-height:1.75">拿货数量：'+fmt(row.value)+'件 ('+pct(row.value,total)+')</div><div style="line-height:1.75">拿货金额：'+money(d.amount||0)+'</div>'+lines('品类占比Top5',d.categories)+lines('品牌占比Top5',d.brands)}
+function pfColorPie(p){var rows=valueRows(p.colors||[]).slice().sort(function(a,b){return n(b.value)-n(a.value)}).slice(0,15);mk('pfColorPie',{type:'pie',data:{labels:rows.map(function(r){return r.name}),datasets:[{label:'拿货数量',data:rows.map(function(r){return r.value}),backgroundColor:rows.map(function(r,i){return r.hex||C[i%C.length]}),borderColor:'#fff',borderWidth:1}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{trigger:'item',formatter:function(c){var total=(c.data&&c.seriesType==='pie'?rows.reduce(function(a,b){return a+n(b.value)},0):rows.reduce(function(a,b){return a+n(b.value)},0));return pfColorPieTooltip(p,rows[c.dataIndex]||{name:c.name,value:c.value},total)}}}}})}
 function pfBar(id,rows,label,color){var rs=valueRows(rows||[]);mk(id,{type:'bar',data:{labels:rs.map(function(r){return r.name}),datasets:[{label:label,data:rs.map(function(r){return r.value}),backgroundColor:color}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{callback:function(v){return fmt(v)}}}}}})}
-function renderCustomerProfile(){var p=pfCurrent();if(!p)return;pfMetricCards(p);pfRecommendation(p);renderPfRepeatCharts(p);pfColorPie(p);pfBar('pfCat',p.categories,'金额',P.amount);var pfBrands=valueRows(p.brands||[]),pfDesigners=valueRows(p.designers||[]),pfBrandLabels=[...new Set(pfBrands.map(function(r){return r.name}).concat(pfDesigners.map(function(r){return r.name})))].filter(function(x){var br=pfBrands.find(function(a){return a.name===x}),de=pfDesigners.find(function(a){return a.name===x});return n(br&&br.value)>0||n(de&&de.value)>0});mk('pfBrand',{type:'bar',data:{labels:pfBrandLabels,datasets:[{label:'品牌',data:pfBrandLabels.map(function(x){var r=pfBrands.find(function(a){return a.name===x});return r?r.value:0}),backgroundColor:P.qty},{label:'设计师品牌',data:pfBrandLabels.map(function(x){var r=pfDesigners.find(function(a){return a.name===x});return r?r.value:0}),backgroundColor:P.amount}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{trigger:'item',callbacks:{label:function(c){return '金额：'+money(c.raw)}}}},scales:{x:{ticks:{callback:function(v){return money(v)}}}}}});pfBar('pfSize',p.sizes,'销量',P.coverage);var priceRows=valueRows(p.price_bands||[]);mk('pfPrice',{type:'bar',data:{labels:priceRows.map(function(r){return r.name}),datasets:[{label:'金额',data:priceRows.map(function(r){return r.value}),backgroundColor:'#00a6ff'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return money(v)}}}}}});var seasonRows=valueRows(p.seasons||[]);mk('pfSeason',{type:'doughnut',data:{labels:seasonRows.map(function(r){return r.name}),datasets:[{data:seasonRows.map(function(r){return r.value}),backgroundColor:seasonRows.map(function(r,i){return C[i%C.length]})}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right'},tooltip:{callbacks:{label:function(c){return c.label+': '+money(c.raw)}}}}}});hydrateUi()}
+function pfPriceBandColor(i){return ['#60a5fa',P.qty,P.amount,P.coverage,'#00a6ff',P.trend,P.muted][i%7]}
+function renderPfCategoryPriceChart(p){var rows=(p.category_prices||[]).filter(function(r){return n(r.amount)>0&&(r.price_bands||[]).some(function(b){return n(b.value)>0})}).sort(function(a,b){return n(b.amount)-n(a.amount)});var order=['0-50','50-100','100-150','150-200','200-300','300-500','500+'];var bandNames=order.filter(function(name){return rows.some(function(r){return (r.price_bands||[]).some(function(b){return b.name===name&&n(b.value)>0})})});if(!rows.length||!bandNames.length){var priceRows=valueRows(p.price_bands||[]);mk('pfPrice',{type:'bar',data:{labels:priceRows.map(function(r){return r.name}),datasets:[{label:'金额',data:priceRows.map(function(r){return r.value}),backgroundColor:'#00a6ff'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:function(v){return money(v)}}}}}});return}function bandValue(row,name){var it=(row.price_bands||[]).find(function(x){return x.name===name})||{};return n(it.value)}function bandTotal(row){return (row.price_bands||[]).reduce(function(sum,b){return sum+n(b.value)},0)}mk('pfPrice',{type:'bar',data:{labels:rows.map(function(r){return r.name}),datasets:bandNames.map(function(name,i){return {label:name,bandName:name,data:rows.map(function(r){return bandValue(r,name)}),backgroundColor:pfPriceBandColor(i),stack:'price',barMaxWidth:28}})},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',grid:{left:92,right:56,top:44,bottom:86},plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:function(c){var row=rows[c.dataIndex]||{},total=bandTotal(row);return c.dataset.label+': '+money(c.raw)+' / 价格带内占 '+pct(c.raw,total)},afterBody:function(ctx){var row=rows[ctx[0].dataIndex]||{},total=bandTotal(row);return ['价格带金额合计 '+money(total),'品类净销售金额 '+money(row.amount),'品类净销售数量 '+fmt(row.qty)+'件','订单数 '+fmt(row.orders)+'笔','成交均价 ¥'+(row.avg||0),'常买价格区间 ¥'+(row.low||0)+'-'+(row.high||0)]}}}},scales:{x:{title:{display:true,text:'价格带成交金额'},ticks:{callback:function(v){return money(v)}}},y:{ticks:{autoSkip:false,font:{size:11}}}}}})}
+function renderCustomerProfile(){var p=pfCurrent();if(!p)return;pfMetricCards(p);pfRecommendation(p);renderPfRepeatCharts(p);pfColorPie(p);pfBar('pfCat',p.categories,'金额',P.amount);var pfBrands=valueRows(p.brands||[]),pfDesigners=valueRows(p.designers||[]),pfBrandLabels=[...new Set(pfBrands.map(function(r){return r.name}).concat(pfDesigners.map(function(r){return r.name})))].filter(function(x){var br=pfBrands.find(function(a){return a.name===x}),de=pfDesigners.find(function(a){return a.name===x});return n(br&&br.value)>0||n(de&&de.value)>0});mk('pfBrand',{type:'bar',data:{labels:pfBrandLabels,datasets:[{label:'品牌',data:pfBrandLabels.map(function(x){var r=pfBrands.find(function(a){return a.name===x});return r?r.value:0}),backgroundColor:P.qty},{label:'设计师品牌',data:pfBrandLabels.map(function(x){var r=pfDesigners.find(function(a){return a.name===x});return r?r.value:0}),backgroundColor:P.amount}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{trigger:'item',callbacks:{label:function(c){return '金额：'+money(c.raw)}}}},scales:{x:{ticks:{callback:function(v){return money(v)}}}}}});pfBar('pfSize',p.sizes,'销量',P.coverage);renderPfCategoryPriceChart(p);var seasonRows=valueRows(p.seasons||[]);mk('pfSeason',{type:'doughnut',data:{labels:seasonRows.map(function(r){return r.name}),datasets:[{data:seasonRows.map(function(r){return r.value}),backgroundColor:seasonRows.map(function(r,i){return C[i%C.length]})}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right'},tooltip:{callbacks:{label:function(c){return c.label+': '+money(c.raw)}}}}}});hydrateUi()}
 
 document.getElementById('sub').textContent=S.date_from+' ~ '+S.date_to+' | '+S.records.toLocaleString()+'条交易 | '+S.customers.toLocaleString()+'位客户';
 document.getElementById('kpi').innerHTML=
@@ -3002,6 +3175,8 @@ var mainColor=coColors.slice().sort(function(a,b){return n(b.qty)-n(a.qty)})[0]|
 document.getElementById('s-co').innerHTML='<div class="tip"><b>颜色备货洞察：</b>颜色按源表颜色名称分别统计，米白、杏色、米白色等分开计算；空值归为“未标记”，花色/拼色/条纹/格纹/豹纹等归为“图案/拼色类”。本板块只分析颜色，并结合品类给出备货优先级。全局销量最高为 '+esc(mainColor.color||'-')+'，净销售量 '+fmt(mainColor.qty)+'件；近期趋势代表色为 '+esc(trendColor.color||'-')+'。销量分层按当前报表所有颜色的净销售量区间计算，近期趋势使用 '+esc(CO.recent30_from||'-')+' ~ '+esc(CO.recent30_to||'-')+' 对比 '+esc(CO.previous30_from||'-')+' ~ '+esc(CO.previous30_to||'-')+'。</div><div class="g">'
 +card('颜色销量Top30',scrollChart('c7all'),true)
 +card('销售额Top20客户颜色销量Top10',customerColorScrollChart('c7cust'),true)
++card('销量Top10颜色的品类分布',chart('c7catDist',true),true)
++card('销量Top10颜色的品牌分布',chart('c7brandDist',true),true)
 +card('颜色备货建议',chart('c7b',true)+stockGroupLegend())
 +card('各品类卖得最好的Top1颜色',top3ScrollChart('c7c'),true)
 +card('颜色月度趋势',chart('c7e',false),true)
@@ -3010,6 +3185,8 @@ var colorAll=coColors.slice().sort(function(a,b){return n(b.qty)-n(a.qty)}).slic
 mk('c7all',{type:'bar',data:{labels:colorAll.map(function(r){return r.color}),datasets:[{label:'净销售量',data:colorAll.map(function(r){return r.qty}),backgroundColor:P.qty,borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return '净销售量: '+fmt(c.raw)+'件'},afterBody:function(ctx){return colorTitle(colorAll[ctx[0].dataIndex]||{})}}}},scales:{x:{title:{display:true,text:'净销售量'},ticks:{callback:function(v){return fmt(v)}}}}}});
 var customerColorRows=positiveRows(CO.top_customer_colors||[],['qty','amount','customers']);
 mk('c7cust',{type:'bar',data:{labels:customerColorRows.map(function(r){return r.color}),datasets:[{label:'净销售量',data:customerColorRows.map(function(r){return r.qty}),backgroundColor:P.qty,xAxisID:'x'},{label:'净销售金额',data:customerColorRows.map(function(r){return r.amount}),backgroundColor:P.amount,xAxisID:'x1'}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:function(c){return c.dataset.label+': '+(c.dataset.xAxisID==='x1'?money(c.raw):fmt(c.raw)+'件')},afterBody:function(ctx){return customerColorTooltip(customerColorRows[ctx[0].dataIndex]||{})}}}},scales:{x:{position:'bottom',title:{display:true,text:'净销售量'},ticks:{callback:function(v){return fmt(v)}}},x1:{position:'top',grid:{drawOnChartArea:false},title:{display:true,text:'净销售金额'},ticks:{callback:function(v){return money(v)}}}}}});
+renderColorBreakdownChart('c7catDist',CO.top_color_category_distribution||[]);
+renderColorBreakdownChart('c7brandDist',CO.top_color_brand_distribution||[]);
 mk('c7b',{type:'bar',data:{labels:colorByGroup.map(function(r){return r.color}),datasets:[{label:'净销售量',data:colorByGroup.map(function(r){return r.qty}),backgroundColor:colorByGroup.map(function(r){return stockGroupColor(r.groupLabel)})}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return '净销售量: '+fmt(c.raw)+'件'},afterBody:function(ctx){var r=colorByGroup[ctx[0].dataIndex]||{};return ['分组 '+esc(r.groupLabel||'-')].concat(colorTitle(r))}}}},scales:{x:{title:{display:true,text:'净销售量'},ticks:{callback:function(v){return fmt(v)}}}}}});
 mk('c7c',{type:'bar',data:{labels:structureRows.map(function(r){return r.label}),datasets:[{label:'净销售量',data:structureRows.map(function(r){return r.qty}),backgroundColor:structureRows.map(function(r){return colorRankColor(r.rank)}),borderRadius:3,barPercentage:.72,categoryPercentage:.78}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return '净销售量: '+fmt(c.raw)+'件'},afterBody:function(ctx){return colorStructureTooltipRow(structureRows[ctx[0].dataIndex]||{})}}}},scales:{x:{title:{display:true,text:'净销售量'},ticks:{callback:function(v){return fmt(v)}}},y:{title:{display:true,text:'品类 / 颜色'},ticks:{autoSkip:false,font:{size:10}}}}}});
 var trendColorNames=(CO.trend_colors||[]).filter(function(color){return n(colorTrendTotals[color])>0});
@@ -3089,14 +3266,14 @@ var acCats=positiveRows(AC.categories||[],['amount','qty','orders','customers'])
 var acSegmentSeries=[{label:'低价带',field:'low_amount',share:'low_amount_share'},{label:'主流价带',field:'main_amount',share:'main_amount_share'},{label:'高价带',field:'high_amount',share:'high_amount_share'}].filter(function(s){return acCats.some(function(r){return n(r[s.field])>0})});
 mk('c13c',{type:'bar',data:{labels:acCats.map(function(r){return r.category}),datasets:acSegmentSeries.map(function(s){return {label:s.label,data:acCats.map(function(r){return r[s.field]}),backgroundColor:acceptSegColor(s.label),stack:'price',shareField:s.share}})},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{position:'bottom'},tooltip:{callbacks:{label:function(c){var r=acCats[c.dataIndex]||{},share=c.dataset.shareField?r[c.dataset.shareField]:0;return c.dataset.label+': '+money(c.raw)+' / 品类内金额占 '+acceptPct(share)}}}},scales:{x:{stacked:true,ticks:{callback:function(v){return money(v)}},title:{display:true,text:'各品类低价 / 主流 / 高价成交金额'}},y:{stacked:true}}}});
 
-document.getElementById('s-pf').innerHTML='<div class="tip"><b>客户画像：</b>选择客户后查看其品类、品牌设计师、颜色、尺码、价格区间和年份季节；订单数按销退单ID去重计算，凡该客户在当前数据内拿过的品类、品牌、设计师、颜色、尺码、年份季节都会计入分析。颜色饼图为避免标签拥挤，仅展示该客户拿货销量Top15颜色。</div><div class="pf-head"><label>客户<select id="pfCustomer">'+pfSelectOptions()+'</select></label></div><div class="pf-mini" id="pfMini"></div><div class="g">'
+document.getElementById('s-pf').innerHTML='<div class="tip"><b>客户画像：</b>选择客户后查看其品类、品牌设计师、颜色、尺码、价格区间和年份季节；订单数按销退单ID去重计算，凡该客户在当前数据内拿过的品类、品牌、设计师、颜色、尺码、年份季节都会计入分析。颜色饼图展示该客户净拿货数量Top15颜色；鼠标悬停颜色后可查看该颜色下的品类占比Top5和品牌占比Top5；价格区间按品类拆分展示，便于判断不同品类的主成交价带。</div><div class="pf-head"><label>客户<select id="pfCustomer">'+pfSelectOptions()+'</select></label></div><div class="pf-mini" id="pfMini"></div><div class="g">'
 +card('客户推荐画像卡','<div class="pf-rec" id="pfRecommend"></div>')
 +card('复拿商品排行',largeChart('pfRepeatProducts'),true)
 +card('全部品类偏好金额',chart('pfCat',false))
 +card('全部品牌 / 设计师偏好',chart('pfBrand',true))
 +card('颜色拿货数量占比Top15','<div class="ch pf-color-chart"><div id="pfColorPie" class="echart"></div></div>')
 +card('全部尺码偏好',chart('pfSize',false))
-+card('价格区间偏好',chart('pfPrice',false))
++card('品类价格区间偏好',chart('pfPrice',true),true)
 +card('年份季节',chart('pfSeason',false))
 +'</div>';
 document.getElementById('pfCustomer').onchange=renderCustomerProfile;
