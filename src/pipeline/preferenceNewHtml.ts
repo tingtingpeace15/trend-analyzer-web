@@ -1545,7 +1545,9 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
   type CategoryPriceGroup = {
     amount: number;
     qty: number;
-    prices: number[];
+    priceAmount: number;
+    priceQty: number;
+    prices: { price: number; qty: number }[];
     bandAmounts: Map<string, number>;
     bandQty: Map<string, number>;
     orderKeys: Set<string>;
@@ -1569,6 +1571,8 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     brand: string | null;
     amount: number;
     qty: number;
+    priceAmount: number;
+    priceQty: number;
     orderKeys: Set<string>;
     categories: Map<string, number>;
     brands: Map<string, number>;
@@ -1578,7 +1582,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     priceBands: Map<string, number>;
     priceSegments: Map<string, number>;
     seasons: Map<string, number>;
-    priceValues: number[];
+    priceValues: { price: number; qty: number }[];
     categoryPrices: Map<string, CategoryPriceGroup>;
     colorDetails: Map<string, ColorBreakdownGroup>;
   };
@@ -1608,6 +1612,8 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
         brand,
         amount: 0,
         qty: 0,
+        priceAmount: 0,
+        priceQty: 0,
         orderKeys: new Set(),
         categories: new Map(),
         brands: new Map(),
@@ -1676,7 +1682,9 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
       g.qty += qty;
       g.orderKeys.add(key);
       if (hasEffectivePrice) {
-        g.priceValues.push(price);
+        g.priceAmount += amount;
+        g.priceQty += qty;
+        g.priceValues.push({ price, qty });
         addNumber(g.priceBands, priceBand(price), amount);
         addNumber(g.priceSegments, acceptanceSegment(price, segmentation), amount);
       }
@@ -1685,14 +1693,25 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
         addNumber(g.categories, category, amount);
         let cp = g.categoryPrices.get(category);
         if (!cp) {
-          cp = { amount: 0, qty: 0, prices: [], bandAmounts: new Map(), bandQty: new Map(), orderKeys: new Set() };
+          cp = {
+            amount: 0,
+            qty: 0,
+            priceAmount: 0,
+            priceQty: 0,
+            prices: [],
+            bandAmounts: new Map(),
+            bandQty: new Map(),
+            orderKeys: new Set(),
+          };
           g.categoryPrices.set(category, cp);
         }
         cp.amount += amount;
         cp.qty += qty;
         if (hasEffectivePrice) {
           const band = priceBand(price);
-          cp.prices.push(price);
+          cp.priceAmount += amount;
+          cp.priceQty += qty;
+          cp.prices.push({ price, qty });
           addNumber(cp.bandAmounts, band, amount);
           addNumber(cp.bandQty, band, qty);
         }
@@ -1834,7 +1853,6 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
   };
 
   const toProfile = (g: ProfileGroup) => {
-      const prices = [...g.priceValues].sort((a, b) => a - b);
       const amount = Math.round(g.amount);
       const categories = metricRows(g.categories);
       const brands = metricRows(g.brands);
@@ -1846,9 +1864,9 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
       const topBrand = brands[0]?.value ?? 0;
       const topColor = colors[0]?.value ?? 0;
       const topSeason = seasons[0]?.value ?? 0;
-      const avgPrice = g.qty ? g.amount / g.qty : 0;
-      const priceP25 = percentile(prices, 0.25);
-      const priceP75 = percentile(prices, 0.75);
+      const avgPrice = g.priceQty ? g.priceAmount / g.priceQty : 0;
+      const priceP25 = weightedPricePercentile(g.priceValues, 0.25);
+      const priceP75 = weightedPricePercentile(g.priceValues, 0.75);
       const priceSpread = avgPrice ? Math.min(100, ((priceP75 - priceP25) / avgPrice) * 100) : 0;
       const lowAmount = g.priceSegments.get('低价带') ?? 0;
       const mainAmount = g.priceSegments.get('主流价带') ?? 0;
@@ -1873,11 +1891,12 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
               : '按实际成交价格带判断';
       const categoryPrices = [...g.categoryPrices.entries()]
         .map(([name, cp]) => {
-          const sortedPrices = [...cp.prices].sort((a, b) => a - b);
-          const avg = cp.amount > 0 && cp.qty > 0 ? cp.amount / cp.qty : percentile(sortedPrices, 0.5);
-          const useQuantileRange = sortedPrices.length >= 3 && percentile(sortedPrices, 0.25) !== percentile(sortedPrices, 0.75);
-          const low = useQuantileRange ? percentile(sortedPrices, 0.25) : avg * 0.85;
-          const high = useQuantileRange ? percentile(sortedPrices, 0.75) : avg * 1.15;
+          const avg = cp.priceQty ? cp.priceAmount / cp.priceQty : 0;
+          const p25 = weightedPricePercentile(cp.prices, 0.25);
+          const p75 = weightedPricePercentile(cp.prices, 0.75);
+          const useQuantileRange = cp.prices.length >= 3 && p25 !== p75;
+          const low = useQuantileRange ? p25 : avg * 0.85;
+          const high = useQuantileRange ? p75 : avg * 1.15;
           const bandAmountTotal = PRICE_BANDS.reduce((sum, b) => sum + (cp.bandAmounts.get(b.label) ?? 0), 0);
           return {
             name,
