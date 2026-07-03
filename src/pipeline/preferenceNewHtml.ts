@@ -8,18 +8,19 @@ import type { PreferenceData } from './preferenceReader';
 import type { Cell } from '../types/excel';
 
 const PRICE_BANDS = [
-  { label: '<20', hi: 20, lt: true },
-  { label: '20-50', hi: 50 },
-  { label: '50-80', hi: 80 },
-  { label: '80-100', hi: 100 },
-  { label: '100-130', hi: 130 },
+  { label: '≤20', hi: 20 },
+  { label: '20-49', hi: 50, lt: true },
+  { label: '50-69', hi: 70, lt: true },
+  { label: '70-89', hi: 90, lt: true },
+  { label: '90-110', hi: 110 },
+  { label: '110-130', hi: 130 },
   { label: '130-160', hi: 160 },
   { label: '160-200', hi: 200 },
   { label: '200-250', hi: 250 },
   { label: '250-300', hi: 300 },
   { label: '300-400', hi: 400 },
   { label: '400-500', hi: 500 },
-  { label: '500+', hi: Infinity },
+  { label: '>500', hi: Infinity, lt: true },
 ] as const;
 
 const ACCEPTANCE_PRICE_BANDS = PRICE_BANDS.map((b) => b.label);
@@ -128,7 +129,7 @@ function percentile(sortedAsc: number[], q: number): number {
 }
 
 function priceBand(price: number): string {
-  return PRICE_BANDS.find((b) => ('lt' in b && b.lt ? price < b.hi : price <= b.hi))?.label ?? '500+';
+  return PRICE_BANDS.find((b) => ('lt' in b && b.lt ? price < b.hi : price <= b.hi))?.label ?? '>500';
 }
 
 function acceptancePriceBand(price: number): string {
@@ -3294,7 +3295,7 @@ const D=JSON.parse(reportDataEl&&reportDataEl.textContent?reportDataEl.textConte
 const S=D.summary;
 const P={amount:'#155cff',qty:'#12b76a',coverage:'#6d4aff',trend:'#ff8a00',muted:'#a6b1c6',soft:'#eaf1ff',ink:'#10205f'};
 const C=['#155cff','#12b76a','#ff8a00','#6d4aff','#00a6ff','#10205f','#22c55e','#a855f7','#f59e0b','#64748b'];
-var PRICE_BAND_LABELS=['<20','20-50','50-80','80-100','100-130','130-160','160-200','200-250','250-300','300-400','400-500','500+'];
+var PRICE_BAND_LABELS=['≤20','20-49','50-69','70-89','90-110','110-130','130-160','160-200','200-250','250-300','300-400','400-500','>500'];
 var CH={},CFG={},OPT={};
 function n(v){return Number(v)||0}
 function fmt(v){v=n(v);var s=v<0?'-':'';v=Math.abs(v);return s+(v>=10000?(v/10000).toFixed(1)+'万':v>=1000?(v/1000).toFixed(1)+'千':v.toFixed?v.toFixed(0):v)}
@@ -3597,7 +3598,7 @@ function bindBookingDimensionBoard(){[['ysShowCategory','category'],['ysShowBran
 var PF_CATEGORY='',PF_BRAND='',PF_CS_FILTER={color:[],size:[],category:[],brand:[]};
 function pfData(){return D.customer_visual_profiles||{customers:[],profiles:[]}}
 function pfBaseCurrent(){var p=pfData();var name=document.getElementById('pfCustomer')?.value||p.customers[0];return (p.profiles||[]).find(function(r){return r.customer===name})||p.profiles[0]}
-function pfPriceBand(price){if(price<20)return '<20';if(price<=50)return '20-50';if(price<=80)return '50-80';if(price<=100)return '80-100';if(price<=130)return '100-130';if(price<=160)return '130-160';if(price<=200)return '160-200';if(price<=250)return '200-250';if(price<=300)return '250-300';if(price<=400)return '300-400';if(price<=500)return '400-500';return '500+'}
+function pfPriceBand(price){if(price<=20)return '≤20';if(price<50)return '20-49';if(price<70)return '50-69';if(price<90)return '70-89';if(price<=110)return '90-110';if(price<=130)return '110-130';if(price<=160)return '130-160';if(price<=200)return '160-200';if(price<=250)return '200-250';if(price<=300)return '250-300';if(price<=400)return '300-400';if(price<=500)return '400-500';return '>500'}
 function pfWeightedPct(values,q){var rows=(values||[]).filter(function(r){return n(r.price)>0&&n(r.qty)>0}).sort(function(a,b){return n(a.price)-n(b.price)}),total=rows.reduce(function(s,r){return s+n(r.qty)},0),target=total*q,acc=0;if(!rows.length||total<=0)return 0;for(var i=0;i<rows.length;i++){acc+=n(rows[i].qty);if(acc>=target)return n(rows[i].price)}return n(rows[rows.length-1].price)}
 function pfRound1(v){return Math.round(n(v)*10)/10}
 function pfAdd(map,key,value){if(!key)return;map[key]=n(map[key])+n(value)}
@@ -3771,7 +3772,7 @@ bindBookingDimensionBoard();
 var AC=acceptData(), ACK=AC.kpi||{}, ACO=AC.overall||{};
 var highCats=(ACK.high_categories||[]).join(' / ')||'-';
 var acSegments=positiveRows(AC.segments||[],['amount','qty','orders','lines']);
-document.getElementById('s-se').innerHTML='<div class="tip"><b>价格接受度洞察：</b>价格段按固定区间统计：&lt;20、20-50、50-80、80-100、100-130、130-160、160-200、200-250、250-300、300-400、400-500、500+；低价带固定为 ≤ ¥'+AC.low_cutoff+'，主流价带为 > ¥'+AC.low_cutoff+' 且 ≤ ¥'+AC.high_cutoff+'，高价带为 > ¥'+AC.high_cutoff+'。当前最能接受的价格段是 '+esc(ACK.most_accepted_band||'-')+'，按数量占 '+acceptPct(ACK.most_accepted_qty_share)+'；金额最高价格段是 '+esc(ACK.highest_amount_band||'-')+'，按金额占 '+acceptPct(ACK.highest_amount_share)+'。高价带金额占 '+acceptPct(ACK.high_amount_share)+'，主要由 '+esc(highCats)+' 承接。整体推荐价位可参考 ¥'+(ACK.recommend_low||ACO.p25||0)+'-'+(ACK.recommend_high||ACO.p75||0)+'。</div><div class="g">'
+document.getElementById('s-se').innerHTML='<div class="tip"><b>价格接受度洞察：</b>价格段按固定区间统计：≤20、20-49、50-69、70-89、90-110、110-130、130-160、160-200、200-250、250-300、300-400、400-500、>500；低价带固定为 ≤ ¥'+AC.low_cutoff+'，主流价带为 > ¥'+AC.low_cutoff+' 且 ≤ ¥'+AC.high_cutoff+'，高价带为 > ¥'+AC.high_cutoff+'。当前最能接受的价格段是 '+esc(ACK.most_accepted_band||'-')+'，按数量占 '+acceptPct(ACK.most_accepted_qty_share)+'；金额最高价格段是 '+esc(ACK.highest_amount_band||'-')+'，按金额占 '+acceptPct(ACK.highest_amount_share)+'。高价带金额占 '+acceptPct(ACK.high_amount_share)+'，主要由 '+esc(highCats)+' 承接。整体推荐价位可参考 ¥'+(ACK.recommend_low||ACO.p25||0)+'-'+(ACK.recommend_high||ACO.p75||0)+'。</div><div class="g">'
 +card('整体价格段成交结构',acceptBandBoard(),true)
 +card('低价 / 主流 / 高价成交占比',chart('c13b',false)+acceptSegmentNote())
 +card('品类价格带成交结构',chart('c13c',true)+acceptCategoryStructureNote())
