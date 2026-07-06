@@ -66,10 +66,10 @@ export interface FilePayload {
   buffer: ArrayBuffer;
 }
 
-/** Worker → 主线程:任务完成。趋势 = 1 个 xlsx;偏好 = html 报告 + 新版 html 报告 + xlsx 数据表 */
+/** Worker → 主线程:任务完成。趋势 = 1 个 xlsx;偏好 = 新版 html 报告 + xlsx 数据表 */
 export type DoneMessage =
   | { type: 'done'; mode: 'trend'; filename: string; buffer: ArrayBuffer; summary: JobSummary }
-  | { type: 'done'; mode: 'preference'; html: FilePayload; newHtml: FilePayload; xlsx: FilePayload; summary: PreferenceSummary };
+  | { type: 'done'; mode: 'preference'; newHtml: FilePayload; xlsx: FilePayload; summary: PreferenceSummary };
 
 /** 对应 main.py 的 job.error = {message, hint, step} */
 export interface ErrorMessage {

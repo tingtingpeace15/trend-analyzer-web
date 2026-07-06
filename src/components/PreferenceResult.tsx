@@ -1,5 +1,5 @@
-// PreferenceResult.tsx — 偏好分析下载页,复刻旧版 Result.jsx 的偏好视图。
-// 新增「新标签页预览」:html 报告用 blob URL 直接打开,不用先下载。
+// PreferenceResult.tsx — 偏好分析下载页。
+// 「新标签页预览」使用 blob URL 直接打开,不用先下载。
 import { useEffect, useMemo, useState } from 'react';
 import {
   IconArrowRight, IconChart, IconCheck, IconDownload, IconGrid, IconLayers,
@@ -49,8 +49,7 @@ function download(buffer: ArrayBuffer, filename: string, mime: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain }: {
-  html: FilePayload;
+export default function PreferenceResult({ newHtml, xlsx, summary, onAgain }: {
   newHtml: FilePayload;
   xlsx: FilePayload;
   summary: PreferenceSummary;
@@ -58,12 +57,7 @@ export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain
 }) {
   const [downloaded, setDownloaded] = useState(false);
 
-  // html 报告的预览 URL(组件存活期间有效)
-  const htmlUrl = useMemo(
-    () => URL.createObjectURL(new Blob([html.buffer], { type: 'text/html' })),
-    [html],
-  );
-  useEffect(() => () => URL.revokeObjectURL(htmlUrl), [htmlUrl]);
+  // 新版 html 报告的预览 URL(组件存活期间有效)
   const newHtmlUrl = useMemo(
     () => URL.createObjectURL(new Blob([newHtml.buffer], { type: 'text/html' })),
     [newHtml],
@@ -126,36 +120,7 @@ export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain
             </div>
           )}
 
-          {/* 副 — 网页报告:预览 + 下载 */}
-          <div className="w-full rounded-card border border-line bg-white px-5 py-4">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-md bg-[#FAFAFA] border border-line flex items-center justify-center shrink-0 text-ink2">
-                <IconChart size={16} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[14px] font-semibold text-ink">网页报告</div>
-                <div className="mt-0.5 text-[12px] text-ink3 font-mono truncate">
-                  {html.filename} · {formatBytes(html.buffer.byteLength)} · 9 个 Tab 交互式图表
-                </div>
-              </div>
-              <a
-                href={htmlUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="shrink-0 h-9 px-3.5 rounded-btn border border-brand text-brand text-[13px] font-medium hover:bg-brand-soft transition-colors inline-flex items-center"
-              >
-                新标签页预览
-              </a>
-              <button
-                onClick={() => download(html.buffer, html.filename, 'text/html')}
-                className="shrink-0 h-9 px-3.5 rounded-btn bg-ink text-white text-[13px] font-medium hover:bg-black transition-colors"
-              >
-                下载
-              </button>
-            </div>
-          </div>
-
-          {/* 新增 — 新客户偏好分析:预览 + 下载 */}
+          {/* 新客户偏好分析:预览 + 下载 */}
           <div className="w-full rounded-card border border-line bg-white px-5 py-4">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-md bg-[#FAFAFA] border border-line flex items-center justify-center shrink-0 text-ink2">
@@ -202,7 +167,7 @@ export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain
               <IconSpark size={14} />
               <div className="text-[14px] font-semibold text-ink">这份分析里有什么</div>
             </div>
-            <div className="text-[12px] text-ink3 mb-3">Excel · 网页 · 双格式</div>
+            <div className="text-[12px] text-ink3 mb-3">Excel · 新客户偏好分析</div>
             <div>
               {SHEETS.map((s, i) => (
                 <SheetCard key={s.key} idx={i + 1} icon={s.icon} name={s.name} desc={s.desc} />
@@ -211,7 +176,7 @@ export default function PreferenceResult({ html, newHtml, xlsx, summary, onAgain
           </div>
           <div className="mt-3 text-[11px] text-ink3 font-mono leading-relaxed">
             Excel sheet 数随输入字段而定(缺列自动跳过)·
-            旧版网页需联网加载 Chart.js · 新版看板内嵌 ECharts
+            新版看板内嵌 ECharts · 可离线打开
           </div>
         </aside>
       </div>

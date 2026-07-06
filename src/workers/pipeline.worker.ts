@@ -4,7 +4,6 @@
 import { readSales, readZhixiao } from '../pipeline/reader';
 import { loadPreference } from '../pipeline/preferenceReader';
 import { analyzePreference, TOP_N } from '../pipeline/preferenceAnalyze';
-import { buildPreferenceHtml } from '../pipeline/preferenceHtml';
 import { buildNewPreferenceHtml, loadPreferenceOrderIds } from '../pipeline/preferenceNewHtml';
 import { buildPreferenceExcel } from '../pipeline/preferenceExcel';
 import { aggregate } from '../pipeline/aggregator';
@@ -209,7 +208,7 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
 };
 
 // ── 客户偏好分析(对应 backend/preference_pipeline.py)────────────────────
-// M9 是 stub:验证 tab/Worker/Result 全链路。M10 接 reader,M11 聚合,M12 出 html+xlsx。
+// M9 是 stub:验证 tab/Worker/Result 全链路。M10 接 reader,M11 聚合,M12 出新版 html+xlsx。
 async function runPreference(files: { role: string; name: string; buffer: ArrayBuffer }[]) {
   const input = files.find((f) => f.role === '拿货历史');
   if (!input) {
@@ -235,10 +234,8 @@ async function runPreference(files: { role: string; name: string; buffer: ArrayB
     `销售额 ¥${((sm.amount as number) / 10000).toFixed(0)}万`,
     'milestone', 2,
   );
-  // ---------- 步骤 3:生成网页报告 ----------
-  banner('生成网页报告', 3);
-  const htmlBytes = new TextEncoder().encode(buildPreferenceHtml(R)).buffer as ArrayBuffer;
-  log(`  ✓ 网页报告已生成（${(htmlBytes.byteLength / 1024).toFixed(0)} KB）`, 'done', 3);
+  // ---------- 步骤 3:生成新客户偏好分析 ----------
+  banner('生成新客户偏好分析', 3);
   const orderIds = loadPreferenceOrderIds(input.buffer);
   const newHtmlBytes = new TextEncoder().encode(buildNewPreferenceHtml(data, orderIds, R)).buffer as ArrayBuffer;
   log(`  ✓ 新客户偏好分析已生成（${(newHtmlBytes.byteLength / 1024).toFixed(0)} KB）`, 'done', 3);
@@ -260,7 +257,6 @@ async function runPreference(files: { role: string; name: string; buffer: ArrayB
     {
       type: 'done',
       mode: 'preference',
-      html: { filename: '客户偏好分析报告.html', buffer: htmlBytes },
       newHtml: { filename: '新客户偏好分析.html', buffer: newHtmlBytes },
       xlsx: { filename: '客户偏好分析数据.xlsx', buffer: xlsxBuf },
       summary: {
@@ -271,6 +267,6 @@ async function runPreference(files: { role: string; name: string; buffer: ArrayB
         dateTo: sm.date_to as string,
       },
     },
-    [htmlBytes, newHtmlBytes, xlsxBuf],
+    [newHtmlBytes, xlsxBuf],
   );
 }

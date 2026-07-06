@@ -1,5 +1,4 @@
 // preferenceNewHtml.ts — 新版客户偏好分析 HTML 报告。
-// 新增链路使用，不替换旧版 buildPreferenceHtml。
 import { PyFloat } from './pyjson';
 import { msToDateStr, pandasColumns, readWorkbook, sheetToRows, sheetWidth } from './reader';
 import echartsSource from './echarts.min.js?raw';

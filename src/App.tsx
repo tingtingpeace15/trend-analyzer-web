@@ -79,7 +79,6 @@ export default function App() {
         )}
         {stage === 'result' && result?.mode === 'preference' && (
           <PreferenceResult
-            html={result.html}
             newHtml={result.newHtml}
             xlsx={result.xlsx}
             summary={result.summary}
