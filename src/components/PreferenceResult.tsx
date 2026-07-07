@@ -1,6 +1,6 @@
 // PreferenceResult.tsx — 偏好分析下载页。
 // 「新标签页预览」使用 blob URL 直接打开,不用先下载。
-import { useEffect, useMemo, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   IconArrowRight, IconChart, IconCheck, IconDownload, IconGrid, IconLayers,
   IconRefresh, IconSpark,
@@ -49,6 +49,18 @@ function download(buffer: ArrayBuffer, filename: string, mime: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function openHtmlPreview(buffer: ArrayBuffer) {
+  const url = URL.createObjectURL(new Blob([buffer], { type: 'text/html;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noreferrer';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  return url;
+}
+
 export default function PreferenceResult({ newHtml, xlsx, summary, onAgain }: {
   newHtml: FilePayload;
   xlsx: FilePayload;
@@ -56,13 +68,16 @@ export default function PreferenceResult({ newHtml, xlsx, summary, onAgain }: {
   onAgain: () => void;
 }) {
   const [downloaded, setDownloaded] = useState(false);
+  const previewUrlsRef = useRef<string[]>([]);
 
-  // 新版 html 报告的预览 URL(组件存活期间有效)
-  const newHtmlUrl = useMemo(
-    () => URL.createObjectURL(new Blob([newHtml.buffer], { type: 'text/html' })),
-    [newHtml],
-  );
-  useEffect(() => () => URL.revokeObjectURL(newHtmlUrl), [newHtmlUrl]);
+  const handlePreview = () => {
+    const url = openHtmlPreview(newHtml.buffer);
+    previewUrlsRef.current.push(url);
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      previewUrlsRef.current = previewUrlsRef.current.filter((item) => item !== url);
+    }, 10 * 60 * 1000);
+  };
 
   return (
     <div className="max-w-[960px] mx-auto px-6 py-12 sm:py-16">
@@ -132,16 +147,14 @@ export default function PreferenceResult({ newHtml, xlsx, summary, onAgain }: {
                   {newHtml.filename} · {formatBytes(newHtml.buffer.byteLength)} · 内嵌图表可离线打开
                 </div>
               </div>
-              <a
-                href={newHtmlUrl}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                onClick={handlePreview}
                 className="shrink-0 h-9 px-3.5 rounded-btn border border-brand text-brand text-[13px] font-medium hover:bg-brand-soft transition-colors inline-flex items-center"
               >
                 新标签页预览
-              </a>
+              </button>
               <button
-                onClick={() => download(newHtml.buffer, newHtml.filename, 'text/html')}
+                onClick={() => download(newHtml.buffer, newHtml.filename, 'text/html;charset=utf-8')}
                 className="shrink-0 h-9 px-3.5 rounded-btn bg-ink text-white text-[13px] font-medium hover:bg-black transition-colors"
               >
                 下载

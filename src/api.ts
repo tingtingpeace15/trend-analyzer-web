@@ -1,4 +1,4 @@
-// api.ts — 主线程跟 pipeline Worker 的通信封装。
+// api.ts — 主线程跟分析 Worker 的通信封装。
 // 旧版 api.jsx 是 fetch + SSE;网页版没有后端,这里换成 Worker 消息,但对 UI 暴露同样的"任务 + 日志流"心智模型。
 import type {
   AnalysisMode,
@@ -40,21 +40,27 @@ export interface JobHandle {
   cancel: () => void;
 }
 
-function createWorker(): Worker {
+function createWorker(mode: AnalysisMode): Worker {
+  if (mode === 'preference') {
+    return new Worker(
+      new URL('./workers/preference.worker.ts', import.meta.url),
+      { type: 'module' },
+    );
+  }
+
   return new Worker(
-    new URL('./workers/pipeline.worker.ts', import.meta.url),
+    new URL('./workers/trend.worker.ts', import.meta.url),
     { type: 'module' },
   );
 }
 
-// Worker bundle 有 ~1.3MB(SheetJS+ExcelJS),按需创建时"下载+编译"会让
-// 用户点了开始后干等好几秒。池子里常备一个预热好的实例:页面加载即预热,
-// 任务正常结束后归还复用;cancel/error 才销毁。
-let pooled: Worker | null = null;
+// 趋势/偏好依赖差异很大,拆成两个 Worker:商品趋势不再加载偏好看板/ECharts。
+// 池子按模式各常备一个预热实例,任务正常结束后归还复用;cancel/error 才销毁。
+const pooled: Partial<Record<AnalysisMode, Worker>> = {};
 
 /** 页面空闲时调用:提前下载+编译 Worker,点「开始分析」即刻可用 */
-export function prewarmWorker(): void {
-  if (!pooled) pooled = createWorker();
+export function prewarmWorker(mode: AnalysisMode = 'trend'): void {
+  if (!pooled[mode]) pooled[mode] = createWorker(mode);
 }
 
 /**
@@ -62,8 +68,8 @@ export function prewarmWorker(): void {
  * cancel() 直接 terminate Worker(没有后端任务要清理)。
  */
 export function startJob(mode: AnalysisMode, inputs: JobInputFile[], cb: JobCallbacks): JobHandle {
-  const worker = pooled ?? createWorker();
-  pooled = null;
+  const worker = pooled[mode] ?? createWorker(mode);
+  delete pooled[mode];
   let alive = true;
 
   worker.onmessage = (e: MessageEvent<WorkerToMainMessage>) => {
@@ -81,7 +87,7 @@ export function startJob(mode: AnalysisMode, inputs: JobInputFile[], cb: JobCall
         // 任务正常完成:Worker 归还池子复用(每次 run 自身会重置状态)
         worker.onmessage = null;
         worker.onerror = null;
-        if (!pooled) pooled = worker;
+        if (!pooled[mode]) pooled[mode] = worker;
         cb.onDone(msg);
         break;
       case 'error':

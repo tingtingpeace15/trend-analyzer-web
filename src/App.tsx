@@ -20,9 +20,9 @@ export default function App() {
   const [error, setError] = useState<JobError | null>(null);
   const jobRef = useRef<JobHandle | null>(null);
 
-  // 页面加载后空闲预热 Worker(1.3MB bundle 提前下载+编译,消掉点开始后的长空白)
+  // 页面加载后空闲预热商品趋势 Worker,消掉点开始后的长空白。
   useEffect(() => {
-    const t = setTimeout(prewarmWorker, 300);
+    const t = setTimeout(() => prewarmWorker('trend'), 300);
     return () => clearTimeout(t);
   }, []);
 
@@ -65,7 +65,7 @@ export default function App() {
       </header>
 
       <main className="flex-1">
-        {stage === 'upload' && <Upload onStart={handleStart} />}
+        {stage === 'upload' && <Upload onStart={handleStart} onModeChange={prewarmWorker} />}
         {stage === 'run' && (
           <Run mode={mode} logs={logs} previews={previews} error={error} onBack={handleBack} />
         )}

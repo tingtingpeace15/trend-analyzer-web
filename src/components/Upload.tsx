@@ -184,8 +184,9 @@ const HELPER_CARDS: Record<AnalysisMode, { n: string; title: string; desc: strin
   ],
 };
 
-export default function Upload({ onStart }: {
+export default function Upload({ onStart, onModeChange }: {
   onStart: (mode: AnalysisMode, files: { role: FileRole; file: File }[]) => void;
+  onModeChange?: (mode: AnalysisMode) => void;
 }) {
   const [mode, setMode] = useState<AnalysisMode>('trend');
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -198,6 +199,7 @@ export default function Upload({ onStart }: {
     setMode(next);
     setFiles([]);
     setUnrec([]);
+    onModeChange?.(next);
   };
 
   const addFiles = useCallback((rawList: File[]) => {
