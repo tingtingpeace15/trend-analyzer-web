@@ -106,11 +106,11 @@ describe('writeExcel(3 个 sheet)', () => {
     }
   });
 
-  it('嵌图:每行有图,placeholder 媒体只存一份', () => {
+  it('嵌图:零销量行不嵌图,有销量行仍嵌图', () => {
     const ws = wb.getWorksheet('商品销售趋势')!;
     const imgs = ws.getImages();
-    expect(imgs.length).toBe(agg.itemsTotal);
-    // 全部用 TINY_PNG → 媒体应只有 1 份(写入时按字节引用去重)
+    expect(imgs.length).toBe(agg.items.filter((item) => item.销售量 > 0).length);
+    // 全部有销量行用 TINY_PNG → 媒体应只有 1 份(写入时按字节引用去重)
     expect(wb.model.media?.length ?? 0).toBe(1);
   });
 
@@ -133,7 +133,7 @@ describe('writeExcel(3 个 sheet)', () => {
     expect(br.nativeRowOff).toBe(-PAD);
   });
 
-  it('趋势列批注(有销量含峰值,零销量为无记录文案)', () => {
+  it('趋势列批注(有销量含峰值,零销量显示无销售且不加批注)', () => {
     const ws = wb.getWorksheet('商品销售趋势')!;
     const trendCol = golden.headers.length;
     const noteTop = ws.getCell(2, trendCol).note;
@@ -141,8 +141,10 @@ describe('writeExcel(3 个 sheet)', () => {
       typeof n === 'string' ? n : (n.texts ?? []).map((t) => t.text).join('');
     expect(textOf(noteTop)).toContain('日销售量: 3186');
     expect(textOf(noteTop)).toContain('峰值:');
-    const noteZero = ws.getCell(1 + agg.itemsTotal, trendCol).note;
-    expect(textOf(noteZero)).toBe(`${agg.windowDays}日内无销售记录`);
+    const zeroCell = ws.getCell(1 + agg.itemsTotal, trendCol);
+    expect(zeroCell.value).toBe('无销售');
+    expect(zeroCell.note).toBeUndefined();
+    expect(zeroCell.font?.color?.argb).toBe('00999999');
   });
 
   it('A价 固定排位:出现时插在销售量之后(2026-06-05 需求)', async () => {

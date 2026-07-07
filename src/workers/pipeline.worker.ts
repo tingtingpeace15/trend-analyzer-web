@@ -112,36 +112,25 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
     }
     log(`  总货号数（来自滞销商品）: ${agg.itemsTotal}`, 'milestone', 2);
     log(`    有销量款: ${agg.itemsWithSales}`, 'normal', 2);
-    log(`    零销量款（趋势图画水平虚线）: ${agg.itemsTotal - agg.itemsWithSales}`, 'normal', 2);
+    log(`    零销量款（趋势列显示“无销售”,不嵌图）: ${agg.itemsTotal - agg.itemsWithSales}`, 'normal', 2);
 
     // ---------- 步骤 3:生成 PNG(对应 pipeline.py:283-434)----------
     banner('步骤 3：生成每款销售趋势图', 3);
     log('  使用渲染器: OffscreenCanvas（Python 版为 matplotlib Agg）', 'normal', 3);
 
-    const zeroValues = new Float64Array(agg.windowDays);
     const totalN = agg.items.length;
     const PROGRESS_EVERY = Math.max(1, Math.floor(totalN / 8));
     const t0 = performance.now();
 
-    // 优化 A:零销量款共用同一组 placeholder PNG(全 0 数据像素相同,只画一次)
-    const isZeroArr = agg.items.map((item) => {
-      const daily = agg.dailyByItem.get(item.货号);
-      if (!daily) return true;
-      for (const v of daily) if (v !== 0) return false;
-      return true;
-    });
-    const hasZero = isZeroArr.includes(true);
-    const placeholderSm = hasZero ? await sceneToPng(buildSmallScene(zeroValues)) : null;
-    const placeholderDt = hasZero
-      ? await sceneToPng(buildDetailScene(zeroValues, agg.dateRange))
-      : null;
+    // 优化 A:零销量款不生成 PNG,Excel 趋势列直接显示“无销售”
+    const isZeroArr = agg.items.map((item) => item.销售量 === 0);
 
     /** 货号原始顺序 idx → {sm, dt} PNG 字节(写 Excel 时按 idx 取) */
     const images = new Map<number, { sm: Uint8Array; dt: Uint8Array }>();
     let doneCount = 0;
     await runPool(totalN, 8, async (i) => {
       if (isZeroArr[i]) {
-        images.set(i, { sm: placeholderSm!, dt: placeholderDt! });
+        // 零销量行不写图片对象,减少 Windows Excel/WPS 渲染压力
       } else {
         const values = agg.dailyByItem.get(agg.items[i].货号)!;
         const [sm, dt] = await Promise.all([
@@ -156,14 +145,11 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
       }
     });
     const chartSecs = ((performance.now() - t0) / 1000).toFixed(1);
-    log(`  画图耗时 ${chartSecs}s（${totalN} 款,零销量共用 placeholder,8 路并行）`, 'normal', 3);
+    log(`  画图耗时 ${chartSecs}s（${totalN} 款,零销量不嵌图,8 路并行）`, 'normal', 3);
 
-    // 样图预览:浏览器里目检 Canvas 复刻效果(零销量 + 第一个有销量款)
+    // 样图预览:浏览器里目检 Canvas 复刻效果(第一个有销量款)
     const firstSalesIdx = agg.items.findIndex((it) => it.销售量 > 0);
     const previews: { label: string; png: ArrayBuffer }[] = [];
-    if (placeholderDt) {
-      previews.push({ label: '零销量 placeholder(详情图)', png: placeholderDt.slice().buffer });
-    }
     if (firstSalesIdx >= 0) {
       const im = images.get(firstSalesIdx)!;
       previews.push({ label: `${agg.items[firstSalesIdx].货号}(小图)`, png: im.sm.slice().buffer });

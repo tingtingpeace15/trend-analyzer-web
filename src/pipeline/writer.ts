@@ -306,12 +306,17 @@ export async function writeExcel(
       writeMetaCells(ws, r, item, LEFT);
       const trendCell = ws.getCell(r, trendCol);
       trendCell.alignment = CENTER;
-      const im = images.get(origIdx);
-      if (im) addAnchoredImage(ws, imageId(im[opts.imgKey]), trendCol, r);
-      const values = valuesOf(item);
-      trendCell.note = {
-        texts: [{ text: buildComment(values, dateRange) }],
-      };
+      if (item.销售量 === 0) {
+        trendCell.value = '无销售';
+        trendCell.font = { color: { argb: GRAY }, italic: true };
+      } else {
+        const im = images.get(origIdx);
+        if (im) addAnchoredImage(ws, imageId(im[opts.imgKey]), trendCol, r);
+        const values = valuesOf(item);
+        trendCell.note = {
+          texts: [{ text: buildComment(values, dateRange) }],
+        };
+      }
       ws.getRow(r).height = opts.rowH;
       if (r % 2 === 0) {
         for (let j = 1; j <= headers.length; j++) ws.getCell(r, j).fill = ALT_FILL;
