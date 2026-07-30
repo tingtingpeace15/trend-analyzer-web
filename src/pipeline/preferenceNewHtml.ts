@@ -424,10 +424,9 @@ function buildBrandStyleAnalysis(data: PreferenceData) {
     const amount = data.amt[i];
     const qty = data.qty[i];
     if (!Number.isFinite(amount) || !Number.isFinite(qty) || (amount === 0 && qty === 0)) continue;
-    const customer = cellText(custCol[i]);
+    const customer = cellText(custCol[i]) ?? '未标记客户';
     const brand = cellText(brandCol[i]) ?? '未标记';
     const designer = cellText(designerCol[i]) ?? '未标记';
-    if (!customer) continue;
     const shop = shopCol ? cellText(shopCol[i]) ?? '未标记' : '未标记';
     const category = catCol ? cellText(catCol[i]) ?? '未分类' : '未分类';
     const year = yearCol ? cellText(yearCol[i]) ?? '' : '';
@@ -527,9 +526,9 @@ function buildBrandStyleAnalysis(data: PreferenceData) {
   const categoryDesignerRows = [...categoryDesigner.entries()]
     .map(([key, g]) => {
       const [category, designer] = key.split('\u0000');
-      return { category, designer, amount: Math.round(g.amount), qty: Math.round(g.qty), customers: g.customers.size };
+      return { category, designer, amount: g.amount, qty: g.qty, customers: g.customers.size };
     })
-    .filter((r) => hasPositiveNet(r.amount, r.qty))
+    .filter((r) => r.amount !== 0 || r.qty !== 0)
     .sort((a, b) => b.amount - a.amount);
 
   const totalDesignerProducts = allProducts.size;
@@ -558,8 +557,8 @@ function buildBrandStyleAnalysis(data: PreferenceData) {
     .map((category) => {
       const g = categorySummary.get(category);
       const productCount = categoryProducts.get(category)?.size ?? 0;
-      const amount = g && Math.round(g.amount) > 0 ? Math.round(g.amount) : 0;
-      const qty = g && Math.round(g.qty) > 0 ? Math.round(g.qty) : 0;
+      const amount = Math.round(g?.amount ?? 0);
+      const qty = Math.round(g?.qty ?? 0);
       return {
         category,
         product_count: productCount,
@@ -571,14 +570,14 @@ function buildBrandStyleAnalysis(data: PreferenceData) {
         qty_share: categoryQtyTotal ? qty / categoryQtyTotal : 0,
       };
     })
-    .filter((r) => r.product_count > 0 || r.amount > 0 || r.qty > 0)
+    .filter((r) => r.product_count > 0 || r.amount !== 0 || r.qty !== 0)
     .sort((a, b) => b.amount - a.amount || b.qty - a.qty || b.product_count - a.product_count);
 
   const categoryShareDetailRows = [...categoryShareDetails.entries()]
     .map(([key, g]) => {
       const [category, brand, designer] = key.split('\u0000');
-      const amount = Math.round(g.amount) > 0 ? Math.round(g.amount) : 0;
-      const qty = Math.round(g.qty) > 0 ? Math.round(g.qty) : 0;
+      const amount = g.amount;
+      const qty = g.qty;
       return {
         category,
         brand,
@@ -589,7 +588,7 @@ function buildBrandStyleAnalysis(data: PreferenceData) {
         customers: g.customers.size,
       };
     })
-    .filter((r) => r.product_count > 0 || r.amount > 0 || r.qty > 0)
+    .filter((r) => r.product_count > 0 || r.amount !== 0 || r.qty !== 0)
     .sort((a, b) => b.amount - a.amount || b.qty - a.qty || b.product_count - a.product_count);
 
   const shopBestBrandRows = [...shopBrand.entries()]
@@ -2010,8 +2009,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     const amount = data.amt[i];
     const qty = data.qty[i];
     if (!Number.isFinite(amount) || !Number.isFinite(qty) || (amount === 0 && qty === 0)) continue;
-    const customer = cellText(custCol[i]);
-    if (!customer) continue;
+    const customer = cellText(custCol[i]) ?? '';
     const price = amount > 0 && qty > 0 ? amount / qty : NaN;
     const hasEffectivePrice = Number.isFinite(price) && price > 0;
     const key = orderKey(orderIds, i, customer);
@@ -2344,6 +2342,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     seasons: [] as string[],
     products: [] as string[],
     orders: [] as string[],
+    raw_colors: [] as string[],
   };
   const detailRowMaps = {
     categories: new Map<string, number>(),
@@ -2354,6 +2353,7 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     seasons: new Map<string, number>(),
     products: new Map<string, number>(),
     orders: new Map<string, number>(),
+    raw_colors: new Map<string, number>(),
   };
   const dictIndex = (kind: keyof typeof detailRowDicts, value: string) => {
     const text = value || '';
@@ -2378,16 +2378,22 @@ function buildCustomerVisualProfiles(data: PreferenceData, orderIds: (Cell | nul
     dictIndex('orders', r[9]),
     r[10],
     r[11],
+    dictIndex('raw_colors', cellText(colorCol?.[r[11]] ?? null) ?? '未标记'),
   ]);
-  const profiles = profileRows
-    .filter((p) => !p.category && !p.brand)
-    .map((p) => ({
-      customer: p.customer,
-      detail_rows: compactDetailRows(p.detail_rows),
+  const customerProfiles = profileRows.filter((p) => p.customer && !p.category && !p.brand);
+  const customerRank = new Map(customerProfiles.map((p, i) => [p.customer, i]));
+  // 客户画像下拉框只展示净成交为正的客户；销售分析仍需保留全表客户明细。
+  const profiles = [...groups.values()]
+    .filter((g) => !g.category && !g.brand)
+    .sort((a, b) => (customerRank.get(a.customer) ?? Number.MAX_SAFE_INTEGER)
+      - (customerRank.get(b.customer) ?? Number.MAX_SAFE_INTEGER))
+    .map((g) => ({
+      customer: g.customer,
+      detail_rows: compactDetailRows(g.detailRows),
     }));
 
   return {
-    customers: profiles.map((p) => p.customer),
+    customers: customerProfiles.map((p) => p.customer),
     detail_row_dicts: detailRowDicts,
     profiles,
   };
@@ -3700,7 +3706,7 @@ function brandSummaryRows(){var b=D.brand_style_analysis||{brand_summary:[]};ret
 function designerSummaryRows(){var b=D.brand_style_analysis||{designer_summary:[]};return (b.designer_summary||[])}
 var DESIGNER_CAT_FILTER={designer:[]};
 function designerCategoryBoard(){return '<div class="designer-cat-board"><div class="co-filter-controls designer-cat-controls"><label>设计师品牌<div id="designerCatDesigner" class="pf-multi"></div></label></div><div class="designer-cat-summary" id="designerCatSummary"></div><div class="designer-cat-charts"><div class="designer-cat-chart"><div class="designer-cat-chart-title">设计师品类款数占比</div><div class="ch"><div id="designerProductPie" class="echart"></div></div></div><div class="designer-cat-chart"><div class="designer-cat-chart-title">设计师品类销售额占比</div><div class="ch"><div id="designerCatPie" class="echart"></div></div></div></div></div>'}
-function designerCategoryRows(){var b=D.brand_style_analysis||{category_designer:[]};return positiveRows(b.category_designer||[],['qty','amount','customers'])}
+function designerCategoryRows(){var b=D.brand_style_analysis||{category_designer:[]};return (b.category_designer||[]).filter(function(r){return n(r.qty)!==0||n(r.amount)!==0})}
 function designerProductRows(){var b=D.brand_style_analysis||{designer_products:[]};return (b.designer_products||[]).filter(function(r){return n(r.product_count)>0}).sort(function(a,b){return n(b.product_count)-n(a.product_count)||String(a.designer||'').localeCompare(String(b.designer||''))})}
 function designerCategoryProductRows(){var b=D.brand_style_analysis||{category_designer_products:[]};return (b.category_designer_products||[]).filter(function(r){return n(r.product_count)>0}).sort(function(a,b){return n(b.product_count)-n(a.product_count)||String(a.category||'').localeCompare(String(b.category||''))})}
 function designerCategoryMatch(r,except){return except==='designer'||multiMatch(DESIGNER_CAT_FILTER,'designer',r.designer)}
@@ -3716,7 +3722,7 @@ function bindDesignerCategoryBoard(){renderDesignerCategoryChart()}
 var CATEGORY_SHARE_FILTER={category:[],brand:[],designer:[]},CATEGORY_SHARE_PAGE=1,CATEGORY_SHARE_PAGE_SIZE=9;
 function categoryShareBoard(){return '<div class="category-share-board"><div class="co-filter-controls category-share-controls"><label>品牌<div id="categoryShareBrand" class="pf-multi"></div></label><label>设计师品牌<div id="categoryShareDesigner" class="pf-multi"></div></label><label>品类<div id="categoryShareCategory" class="pf-multi"></div></label></div><div class="category-share-chart"><div class="category-share-chart-title">开发款占比 / 销售金额占比 / 销售件数占比</div><div class="ch"><div id="categorySharePie" class="echart"></div></div><div class="co-filter-pager" id="categorySharePager"></div></div></div>'}
 function categoryShareRows(){var b=D.brand_style_analysis||{category_shares:[]};return (b.category_shares||[]).filter(function(r){return n(r.product_count)>0||n(r.amount)>0||n(r.qty)>0}).sort(function(a,b){return n(b.amount)-n(a.amount)||n(b.qty)-n(a.qty)||n(b.product_count)-n(a.product_count)})}
-function categoryShareDetailRows(){var b=D.brand_style_analysis||{category_share_details:[]},rows=b.category_share_details||[];if(rows.length)return rows.filter(function(r){return n(r.product_count)>0||n(r.amount)>0||n(r.qty)>0});return categoryShareRows().map(function(r){return {category:r.category,brand:'',designer:'',product_count:r.product_count,amount:r.amount,qty:r.qty,customers:r.customers}})}
+function categoryShareDetailRows(){var b=D.brand_style_analysis||{category_share_details:[]},rows=b.category_share_details||[];if(rows.length)return rows.filter(function(r){return n(r.product_count)>0||n(r.amount)!==0||n(r.qty)!==0});return categoryShareRows().map(function(r){return {category:r.category,brand:'',designer:'',product_count:r.product_count,amount:r.amount,qty:r.qty,customers:r.customers}})}
 function categoryShareOptionMatch(r,except){return (except==='category'||multiMatch(CATEGORY_SHARE_FILTER,'category',r.category))&&(except==='brand'||multiMatch(CATEGORY_SHARE_FILTER,'brand',r.brand))&&(except==='designer'||multiMatch(CATEGORY_SHARE_FILTER,'designer',r.designer))}
 function categoryShareOptionRows(kind){var rows=categoryShareDetailRows(),by={};rows.forEach(function(r){if(!categoryShareOptionMatch(r,kind))return;var name=kind==='category'?r.category:kind==='brand'?r.brand:r.designer;if(!name)return;if(!by[name])by[name]={name:name,amount:0,qty:0,product_count:0};by[name].amount+=n(r.amount);by[name].qty+=n(r.qty);by[name].product_count+=n(r.product_count)});return Object.keys(by).map(function(k){return by[k]}).filter(function(r){return n(r.product_count)>0||n(r.amount)>0||n(r.qty)>0}).sort(function(a,b){return n(b.amount)-n(a.amount)||n(b.qty)-n(a.qty)||n(b.product_count)-n(a.product_count)})}
 function categoryShareNormalize(){['category','brand','designer'].forEach(function(kind){var allowed=categoryShareOptionRows(kind).map(function(r){return r.name});CATEGORY_SHARE_FILTER[kind]=multiValues(CATEGORY_SHARE_FILTER,kind).filter(function(v){return allowed.indexOf(v)>=0})})}
@@ -3847,12 +3853,12 @@ function bindCategoryBrandDesignerBoard(){renderCategoryBrandDesignerChart()}
 function brandDesignerBoard(){var b=D.brand_style_analysis||{brand_summary:[],brand_designer:[]},by={};positiveRows(b.brand_designer||[],['qty','amount','customers']).forEach(function(r){var brand=r.brand||'未标记',designer=r.designer||'未标记';if(!by[brand])by[brand]={amount:0,qty:0,items:{}};by[brand].amount+=n(r.amount);by[brand].qty+=n(r.qty);if(!by[brand].items[designer])by[brand].items[designer]={designer:designer,amount:0,qty:0};by[brand].items[designer].amount+=n(r.amount);by[brand].items[designer].qty+=n(r.qty)});var brands=positiveRows(b.brand_summary||[],['qty','amount','customers']).slice().sort(function(a,b){return n(b.amount)-n(a.amount)||n(b.qty)-n(a.qty)});var palette=[P.amount,P.qty,P.trend];return '<div class="brand-designer-board">'+brands.map(function(br,i){var brand=br.brand||'未标记',g=by[brand]||{amount:n(br.amount),qty:n(br.qty),items:{}},total=n(br.amount)||n(g.amount)||1,totalQty=n(br.qty)||n(g.qty),items=Object.keys(g.items).map(function(k){return g.items[k]}).filter(function(x){return n(x.amount)>0||n(x.qty)>0}).sort(function(a,b){return n(b.amount)-n(a.amount)||n(b.qty)-n(a.qty)}).slice(0,3);var rows=items.length?items.map(function(it,j){var share=total?n(it.amount)/total:0,w=Math.max(2,Math.min(100,share*100));return '<div class="brand-designer-row" title="'+esc(brand+' / '+it.designer+'：'+money(it.amount)+'，'+fmt(it.qty)+'件，占该品牌 '+pct(it.amount,total))+'"><strong>'+esc(it.designer)+'</strong><span>'+money(it.amount)+'</span><small>'+fmt(it.qty)+'件 / 占该品牌 '+pct(it.amount,total)+'</small><div class="brand-designer-bar"><i style="width:'+w+'%;background:'+palette[j%palette.length]+'"></i></div></div>'}).join(''):'<div class="cat-empty">暂无设计师品牌数据</div>';return '<div class="brand-designer-card"><div class="brand-designer-head"><div><b>'+esc(brand)+'</b><span>'+fmt(totalQty)+'件 / '+money(total)+'</span></div><em>品牌Top'+(i+1)+'</em></div><div class="brand-designer-list">'+rows+'</div></div>'}).join('')+'</div>'}
 var BS_CS_FILTER={brand:[],category:[],color:[],size:[]},BS_CS_ROWS=null;
 function bsCsSourceRows(){if(BS_CS_ROWS)return BS_CS_ROWS;BS_CS_ROWS=(D.customer_visual_profiles&&D.customer_visual_profiles.profiles||[]).flatMap(function(p){return (pfDecodeProfile(p).detail_rows)||[]});return BS_CS_ROWS}
-function bsCsMatch(r,except){return (except==='brand'||multiMatch(BS_CS_FILTER,'brand',r[3]))&&(except==='category'||multiMatch(BS_CS_FILTER,'category',r[2]))&&(except==='color'||multiMatch(BS_CS_FILTER,'color',r[5]))&&(except==='size'||multiMatch(BS_CS_FILTER,'size',r[6]))}
-function bsCsOptionRows(kind){var idx={category:2,brand:3,color:5,size:6}[kind],by={};bsCsSourceRows().forEach(function(r){if(!bsCsMatch(r,kind))return;var name=r[idx]||'';if(!name)return;if(!by[name])by[name]={name:name,amount:0,qty:0,orders:{}};by[name].amount+=n(r[0]);by[name].qty+=n(r[1]);by[name].orders[r[9]||'']=1});return Object.keys(by).map(function(k){var r=by[k];return {name:k,amount:Math.round(r.amount),qty:Math.round(r.qty),orders:Object.keys(r.orders).length}}).filter(function(r){return n(r.qty)>0&&n(r.amount)>0}).sort(function(a,b){return kind==='brand'||kind==='category'?(n(b.amount)-n(a.amount)||n(b.qty)-n(a.qty)):(n(b.qty)-n(a.qty)||n(b.amount)-n(a.amount))})}
+function bsCsMatch(r,except){return (except==='brand'||multiMatch(BS_CS_FILTER,'brand',r[3]))&&(except==='category'||multiMatch(BS_CS_FILTER,'category',r[2]))&&(except==='color'||multiMatch(BS_CS_FILTER,'color',r[12]||r[5]))&&(except==='size'||multiMatch(BS_CS_FILTER,'size',r[6]))}
+function bsCsOptionRows(kind){var idx={category:2,brand:3,color:12,size:6}[kind],by={};bsCsSourceRows().forEach(function(r){if(!bsCsMatch(r,kind))return;var name=r[idx]||'';if(!name)return;if(!by[name])by[name]={name:name,amount:0,qty:0,orders:{}};by[name].amount+=n(r[0]);by[name].qty+=n(r[1]);by[name].orders[r[9]||'']=1});return Object.keys(by).map(function(k){var r=by[k];return {name:k,amount:Math.round(r.amount),qty:Math.round(r.qty),orders:Object.keys(r.orders).length}}).filter(function(r){return n(r.qty)>0&&(kind==='color'||kind==='size'||n(r.amount)>0)}).sort(function(a,b){return kind==='brand'||kind==='category'?(n(b.amount)-n(a.amount)||n(b.qty)-n(a.qty)):(n(b.qty)-n(a.qty)||n(b.amount)-n(a.amount))})}
 function bsCsNormalize(){['brand','category','color','size'].forEach(function(kind){var allowed=bsCsOptionRows(kind).map(function(r){return r.name});BS_CS_FILTER[kind]=multiValues(BS_CS_FILTER,kind).filter(function(v){return allowed.indexOf(v)>=0})});}
 function bsCsSetOptions(kind,label){var id={brand:'bsCsBrand',category:'bsCsCategory',color:'bsCsColor',size:'bsCsSize'}[kind];setMultiControl(id,BS_CS_FILTER,kind,label,bsCsOptionRows(kind),renderBrandColorSizeBoard)}
 function refreshBsCsControls(){bsCsNormalize();bsCsSetOptions('brand','品牌');bsCsSetOptions('category','品类');bsCsSetOptions('color','颜色');bsCsSetOptions('size','尺码')}
-function bsCsRows(){return bsCsSourceRows().filter(function(r){return bsCsMatch(r,'')})}
+function bsCsRows(){return bsCsSourceRows().filter(function(r){return bsCsMatch(r,'')}).map(function(r){var x=r.slice();x[5]=r[12]||r[5];return x})}
 function colorSizeProfileFromRows(rows){var colors={},sizes={},colorDetails={};(rows||[]).forEach(function(r){var a=n(r[0]),q=n(r[1]),cat=r[2]||'',brand=r[3]||'',color=r[5]||'',size=r[6]||'';pfAdd(colors,color,q);pfAdd(sizes,size,q);if(a>0&&q>0&&color){if(!colorDetails[color])colorDetails[color]={amount:0,qty:0,categories:{},brands:{}};colorDetails[color].amount+=a;colorDetails[color].qty+=q;pfAddMetric(colorDetails[color].categories,cat||'未分类',a,q);pfAddMetric(colorDetails[color].brands,brand||'未标记品牌',a,q)}});return {colors:pfMetricRows(colors,'qty').map(function(r){return Object.assign({},r,{hex:pfColorHex(r.name)})}),sizes:pfMetricRows(sizes,'qty'),color_details:Object.keys(colorDetails).map(function(color){var d=colorDetails[color],catQty=Object.keys(d.categories).reduce(function(s,k){return s+n(d.categories[k].qty)},0),brandQty=Object.keys(d.brands).reduce(function(s,k){return s+n(d.brands[k].qty)},0);function rowsOf(map,total){return Object.keys(map).map(function(k){return {name:k,qty:Math.round(n(map[k].qty)),amount:Math.round(n(map[k].amount)),share:total?n(map[k].qty)/total:0}}).filter(function(x){return n(x.qty)>0}).sort(function(a,b){return n(b.qty)-n(a.qty)||n(b.amount)-n(a.amount)})}return {color:color,hex:pfColorHex(color),qty:Math.round(n(d.qty)),amount:Math.round(n(d.amount)),categories:rowsOf(d.categories,catQty||d.qty),brands:rowsOf(d.brands,brandQty||d.qty)}}).filter(function(r){return n(r.qty)>0}).sort(function(a,b){return n(b.qty)-n(a.qty)||n(b.amount)-n(a.amount)})}}
 function bsCsProfile(){return colorSizeProfileFromRows(bsCsRows())}
 function brandColorSizeBoard(){return '<div class="pf-cs-board"><div class="pf-cs-controls"><label>品牌<div id="bsCsBrand" class="pf-multi"></div></label><label>品类<div id="bsCsCategory" class="pf-multi"></div></label><label>颜色<div id="bsCsColor" class="pf-multi"></div></label><label>尺码<div id="bsCsSize" class="pf-multi"></div></label></div><div class="pf-cs-charts"><div class="pf-cs-chartbox"><h4>颜色拿货数量占比</h4><div class="ch pf-color-chart"><div id="bsColorPie" class="echart"></div></div></div><div class="pf-cs-chartbox"><h4>全部尺码偏好</h4>'+pfScrollChart('bsSize')+'</div></div></div>'}
@@ -3888,7 +3894,7 @@ function bindBookingDimensionBoard(){[['ysShowCategory','category'],['ysShowBran
 var PF_CATEGORY='',PF_BRAND='',PF_CS_FILTER={color:[],size:[],category:[],brand:[]};
 function pfData(){return D.customer_visual_profiles||{customers:[],profiles:[],detail_row_dicts:{}}}
 function pfDictVal(arr,idx){return idx==null||idx<0?'':((arr||[])[idx]||'')}
-function pfDecodeRow(r,dicts){if(!r||typeof r[2]!=='number')return r;return [r[0],r[1],pfDictVal(dicts.categories,r[2]),pfDictVal(dicts.brands,r[3]),pfDictVal(dicts.designers,r[4]),pfDictVal(dicts.colors,r[5]),pfDictVal(dicts.sizes,r[6]),pfDictVal(dicts.seasons,r[7]),pfDictVal(dicts.products,r[8]),pfDictVal(dicts.orders,r[9]),r[10],r[11]]}
+function pfDecodeRow(r,dicts){if(!r||typeof r[2]!=='number')return r;return [r[0],r[1],pfDictVal(dicts.categories,r[2]),pfDictVal(dicts.brands,r[3]),pfDictVal(dicts.designers,r[4]),pfDictVal(dicts.colors,r[5]),pfDictVal(dicts.sizes,r[6]),pfDictVal(dicts.seasons,r[7]),pfDictVal(dicts.products,r[8]),pfDictVal(dicts.orders,r[9]),r[10],r[11],pfDictVal(dicts.raw_colors,r[12])||pfDictVal(dicts.colors,r[5])]}
 function pfDecodeProfile(p){if(!p||p._detailRowsDecoded)return p;var dicts=pfData().detail_row_dicts||{};p.detail_rows=(p.detail_rows||[]).map(function(r){return pfDecodeRow(r,dicts)});p._detailRowsDecoded=true;return p}
 function pfBaseCurrent(){var p=pfData();var name=document.getElementById('pfCustomer')?.value||p.customers[0],raw=(p.profiles||[]).find(function(r){return r.customer===name})||p.profiles[0];if(!raw)return null;raw=pfDecodeProfile(raw);if(!raw._profileBuilt){raw._profileBuilt=pfBuildProfile(raw,raw.detail_rows||[])}return raw._profileBuilt}
 function pfPriceBand(price){if(price<=20)return '≤20';if(price<50)return '20-49';if(price<70)return '50-69';if(price<90)return '70-89';if(price<=110)return '90-110';if(price<=130)return '110-130';if(price<=160)return '130-160';if(price<=200)return '160-200';if(price<=250)return '200-250';if(price<=300)return '250-300';if(price<=400)return '300-400';if(price<=500)return '400-500';return '>500'}
