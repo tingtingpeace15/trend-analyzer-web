@@ -53,8 +53,8 @@ function remapName(c: string): string | null {
   if (s.includes('下单时间') || s.includes('日期')) return '下单时间';
   if (s === '客户名称' || s === '客户') return '客户名称';
   if (s === '销售' || s === '销售员' || s === '业务员') return '销售';
-  if (s.includes('净销售金额')) return '销售金额';
-  if (s.includes('净销售量')) return '销售量';
+  if (s.includes('净销售金额') || s.includes('净销售额')) return '销售金额';
+  if (s.includes('净销售量') || s.includes('净销量')) return '销售量';
   return null;
 }
 
@@ -137,7 +137,7 @@ export function loadPreference(data: ArrayBuffer | Uint8Array): PreferenceData {
     if (!columns.includes(need)) {
       throw new PipelineError(
         `上传的文件缺少必需字段「${need}」`,
-        '销售明细必须包含 客户名称 / 净销售量 / 净销售金额 三列（取净值，已扣退货），请检查文件表头是不是含「净」前缀。',
+        '销售明细必须包含 客户名称 / 净销售量(或净销量) / 净销售金额(或净销售额) 三列（取净值，已扣退货），请检查文件表头是不是含「净」前缀。',
       );
     }
   }

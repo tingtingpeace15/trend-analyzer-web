@@ -133,8 +133,10 @@ export function msToDateStr(ms: number): string {
 // ── 滞销商品表(pipeline.py:116-126)────────────────────────────────────
 
 /**
- * 读滞销商品:表头在第 2 行(header=1,第 1 行是合并大标题),
+ * 读滞销商品:表头默认在第 2 行(header=1,第 1 行是合并大标题),
  * 必需字段只有「货号」;按 货号_k 去重保留首行。所有列原样保留(透传用)。
+ * 兼容:第 2 行没有「货号」时(如导出不带大标题),在前 3 行里找含「货号」的行当表头;
+ * 第 2 行有「货号」时行为与 Python 版完全一致。
  */
 export function readZhixiao(data: ArrayBuffer | Uint8Array): ZhixiaoTable {
   let wb: XLSX.WorkBook;
@@ -149,7 +151,10 @@ export function readZhixiao(data: ArrayBuffer | Uint8Array): ZhixiaoTable {
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = sheetToRows(ws);
   const width = sheetWidth(ws);
-  const HEADER_ROW = 1; // pandas header=1
+  const hasKey = (i: number) =>
+    rows[i] != null && pandasColumns(rows[i], width).includes('货号');
+  // pandas header=1;不含「货号」时退到前 3 行里第一个含「货号」的行
+  const HEADER_ROW = hasKey(1) ? 1 : ([0, 2].find(hasKey) ?? 1);
   if (rows.length <= HEADER_ROW) {
     throw new PipelineError(
       '无法读取滞销商品:文件行数不足',
@@ -160,7 +165,7 @@ export function readZhixiao(data: ArrayBuffer | Uint8Array): ZhixiaoTable {
   if (!columns.includes('货号')) {
     throw new PipelineError(
       '滞销商品缺少必需字段「货号」',
-      '请检查文件第二行是否包含 货号 列。',
+      '请检查文件前 3 行里是否有包含 货号 列的表头。',
     );
   }
   const keyIdx = columns.indexOf('货号');
@@ -181,8 +186,22 @@ export function readZhixiao(data: ArrayBuffer | Uint8Array): ZhixiaoTable {
 
 // ── 拿货历史(pipeline.py:128-172)───────────────────────────────────────
 
-const SNIFF_KEYWORDS = ['货号', '净销售', '下单时间', '客户名称'];
+const SNIFF_KEYWORDS = ['货号', '净销售', '净销量', '下单时间', '客户名称'];
 const REQUIRED_SALES_FIELDS = ['货号', '下单时间', '净销售量', '净销售金额'] as const;
+
+/** 列名别名 → 标准名(用户要求:净销量=净销售量,净销售额=净销售金额)。
+ *  同一 sheet 里标准名已存在时不改名,以标准名为准。 */
+const SALES_FIELD_ALIASES: Record<string, string> = {
+  净销量: '净销售量',
+  净销售额: '净销售金额',
+};
+
+function applySalesAliases(columns: string[]): string[] {
+  return columns.map((c) => {
+    const target = SALES_FIELD_ALIASES[c.trim()];
+    return target && !columns.includes(target) ? target : c;
+  });
+}
 
 /**
  * 读拿货历史:多 sheet。每个 sheet 在前 3 行嗅探表头(含任一关键词的行);
@@ -216,7 +235,7 @@ export function readSales(data: ArrayBuffer | Uint8Array, fileName = ''): SalesT
       }
     }
     const headerIdx = hrow ?? 0;
-    const columns = pandasColumns(rows[headerIdx] ?? [], width);
+    const columns = applySalesAliases(pandasColumns(rows[headerIdx] ?? [], width));
     const dataRows = rows.length - headerIdx - 1;
     const kept = columns.length >= 10;
     sheetMeta.push({ name, headerRow: hrow, cols: columns.length, rows: Math.max(dataRows, 0), kept });
@@ -247,7 +266,7 @@ export function readSales(data: ArrayBuffer | Uint8Array, fileName = ''): SalesT
     if (!columns.includes(need)) {
       throw new PipelineError(
         `拿货历史缺少必需字段「${need}」。`,
-        '请确认表头含 货号 / 下单时间 / 净销售量 / 净销售金额。',
+        '请确认表头含 货号 / 下单时间 / 净销售量(或净销量) / 净销售金额(或净销售额)。',
       );
     }
   }
