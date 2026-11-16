@@ -80,7 +80,7 @@ self.onmessage = async (e: MessageEvent<MainToWorkerMessage>) => {
     if (sales.records.length === 0) {
       throw new PipelineError(
         '拿货历史清洗后没有有效记录',
-        '请检查「下单时间」列是否为日期格式、「货号」列是否有值。',
+        '请检查「下单时间」(或「创建时间」)列是否为日期格式、「货号」列是否有值。',
       );
     }
 

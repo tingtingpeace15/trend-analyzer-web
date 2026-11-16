@@ -124,6 +124,16 @@ export function loadPreference(data: ArrayBuffer | Uint8Array): PreferenceData {
     const t = remapName(c);
     if (t != null) remap.set(c, t);
   }
+  // 创建时间 = 下单时间(2026-11-16 用户要求,Python 版没有这条):
+  // 只在没有任何列映射成「下单时间」时才顶上,且只取第一列,
+  // 保证有下单时间/日期列的文件行为跟 Python 版完全一致。
+  // 不加进 SNIFF:导出标题行常带「创建时间:xxx」,加了会误判表头。
+  if (![...remap.values()].includes('下单时间')) {
+    const createTime = rawColumns.find(
+      (c) => !remap.has(c) && c.trim().replace(/[:：]+$/, '').includes('创建时间'),
+    );
+    if (createTime !== undefined) remap.set(createTime, '下单时间');
+  }
   const targetNames = new Set(remap.values());
   const droppedConflicts = rawColumns.filter(
     (c) => !remap.has(c) && targetNames.has(c.trim().replace(/[:：]+$/, '')),

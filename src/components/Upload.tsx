@@ -178,7 +178,7 @@ const HELPER_CARDS: Record<AnalysisMode, { n: string; title: string; desc: strin
     { n: '03', title: '下载报表', desc: '3 个 sheet · 含嵌入式趋势图' },
   ],
   preference: [
-    { n: '01', title: '上传一份 Excel', desc: '「各商品客户拿货历史」按文件名识别' },
+    { n: '01', title: '上传一份 Excel', desc: '「各商品客户拿货历史 / 商品客户拿货·含散客」按文件名识别' },
     { n: '02', title: '聚合客户偏好', desc: '品类 / 颜色 / 尺码 / 价格 / 品牌' },
     { n: '03', title: '下载 Excel + 网页', desc: '约 20 个 sheet · 9 Tab 交互式报告' },
   ],
@@ -253,16 +253,16 @@ export default function Upload({ onStart, onModeChange }: {
 
   const heroTitle = isPref ? '上传一份 Excel' : '上传两份 Excel';
   const heroSub = isPref
-    ? '文件名需包含 拿货历史 / 客户偏好 / 拿货 · 数据全程在浏览器本地处理'
+    ? '文件名需包含 拿货历史 / 商品客户拿货·含散客 · 数据全程在浏览器本地处理'
     : '程序按文件名自动识别 · 数据全程在浏览器本地处理';
   const dropIdleTitle = isPref ? '拖入「各商品客户拿货历史」Excel' : '拖入两个 Excel 文件';
   const dropIdleHint = isPref
-    ? '或点击选择 · 文件名带 拿货历史 / 客户偏好 即可'
+    ? '或点击选择 · 文件名带 拿货历史 / 商品客户拿货·含散客 即可'
     : '或点击选择 · 自动识别滞销商品 + 各商品客户拿货历史';
   const unrecHint: ReactNode = isPref ? (
-    <> — 文件名需包含 <span className="font-mono">拿货历史</span> 或 <span className="font-mono">客户偏好</span></>
+    <> — 文件名需包含 <span className="font-mono">拿货历史</span>(如 各商品客户拿货历史 / 客户拿货历史)或 <span className="font-mono">商品客户拿货·含散客</span>(也兼容"客户偏好 / 拿货")</>
   ) : (
-    <> — 文件名需包含 <span className="font-mono">滞销</span> 或 <span className="font-mono">各商品客户拿货历史</span>(也兼容"销售明细 / 销售单明细 / 销售流水")</>
+    <> — 文件名需包含 <span className="font-mono">滞销</span>,或 <span className="font-mono">拿货历史</span>(如 各商品客户拿货历史 / 客户拿货历史)/ <span className="font-mono">商品客户拿货·含散客</span>(也兼容"销售明细 / 销售单明细 / 销售流水")</>
   );
 
   const submit = () => {

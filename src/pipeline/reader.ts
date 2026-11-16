@@ -189,11 +189,13 @@ export function readZhixiao(data: ArrayBuffer | Uint8Array): ZhixiaoTable {
 const SNIFF_KEYWORDS = ['货号', '净销售', '净销量', '下单时间', '客户名称'];
 const REQUIRED_SALES_FIELDS = ['货号', '下单时间', '净销售量', '净销售金额'] as const;
 
-/** 列名别名 → 标准名(用户要求:净销量=净销售量,净销售额=净销售金额)。
- *  同一 sheet 里标准名已存在时不改名,以标准名为准。 */
+/** 列名别名 → 标准名(用户要求:净销量=净销售量,净销售额=净销售金额,创建时间=下单时间)。
+ *  同一 sheet 里标准名已存在时不改名,以标准名为准(既有「下单时间」又有「创建时间」时用「下单时间」)。
+ *  注意别名不加进 SNIFF_KEYWORDS:导出文件的标题行常带「创建时间:xxx」,加了会把标题行误当表头。 */
 const SALES_FIELD_ALIASES: Record<string, string> = {
   净销量: '净销售量',
   净销售额: '净销售金额',
+  创建时间: '下单时间',
 };
 
 function applySalesAliases(columns: string[]): string[] {
@@ -266,7 +268,7 @@ export function readSales(data: ArrayBuffer | Uint8Array, fileName = ''): SalesT
     if (!columns.includes(need)) {
       throw new PipelineError(
         `拿货历史缺少必需字段「${need}」。`,
-        '请确认表头含 货号 / 下单时间 / 净销售量(或净销量) / 净销售金额(或净销售额)。',
+        '请确认表头含 货号 / 下单时间(或创建时间) / 净销售量(或净销量) / 净销售金额(或净销售额)。',
       );
     }
   }
